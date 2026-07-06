@@ -1,0 +1,40 @@
+<!-- app/templates/email/default_mail.html -->
+
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8" />
+    <title>{{ subject }}</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f4f6f8; font-family: Arial, sans-serif;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f4f6f8; padding: 40px 0;">
+        <tr>
+            <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.08);">
+                    <tr>
+                        <td style="background-color: #111827; padding: 32px; text-align: center;">
+                            <h1 style="margin: 0; color: #ffffff; font-size: 24px;">
+                                {{ title }}
+                            </h1>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td style="padding: 32px; color: #374151; font-size: 16px; line-height: 1.6;">
+                            <p style="margin-top: 0;">
+                                {{ message }}
+                            </p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td style="padding: 24px 32px; background-color: #f9fafb; color: #6b7280; font-size: 13px; text-align: center;">
+                            Deze e-mail is automatisch verzonden.
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

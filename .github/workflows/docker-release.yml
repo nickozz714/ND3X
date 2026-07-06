@@ -1,0 +1,109 @@
+name: Docker release
+
+# Builds and publishes the two-container images (frontend + backend) to GHCR, then
+# attaches the run-anywhere compose file to a GitHub release. This is the Docker
+# counterpart to desktop-build.yml (OS installers) — a separate release line.
+#
+# Triggers:
+#   - push a tag `docker-v*` (e.g. docker-v0.5.0)  → tagged images + a release
+#   - manual run (Actions ▸ Docker release ▸ Run workflow) — pick tag + frontend ref
+#
+# Secrets:
+#   FE_REPO_TOKEN — read access to the private frontend repo (same one desktop-build uses).
+#   GHCR auth uses the built-in GITHUB_TOKEN (needs packages: write, set below).
+on:
+  push:
+    tags: ["docker-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag (e.g. 0.5.0 or latest)"
+        default: "latest"
+      fe_ref:
+        description: "Frontend git ref to build (branch/tag/sha)"
+        default: "main"
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  FE_REPO: nickozz714/lovely-landing-project
+  REGISTRY: ghcr.io
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve version + owner
+        id: meta
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/docker-v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/docker-v}"
+          else
+            TAG="${{ github.event.inputs.tag }}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout backend (ND3X)
+        uses: actions/checkout@v4
+        with:
+          path: ND3X
+
+      - name: Checkout frontend (sibling)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.FE_REPO }}
+          ref: ${{ github.event.inputs.fe_ref || 'main' }}
+          token: ${{ secrets.FE_REPO_TOKEN }}
+          path: lovely-landing-project
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ND3X
+          file: ND3X/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.owner }}/nd3x-backend:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.owner }}/nd3x-backend:latest
+
+      - name: Build + push frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: lovely-landing-project
+          file: lovely-landing-project/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.owner }}/nd3x-frontend:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.owner }}/nd3x-frontend:latest
+
+      - name: Attach compose to the release (on tag)
+        if: startsWith(github.ref, 'refs/tags/docker-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ND3X/docker-compose.release.yml
+          body: |
+            ## ND3X ${{ steps.meta.outputs.tag }} — Docker images
+
+            Two-container deployment (frontend + backend) plus an Ollama sidecar.
+
+            ```bash
+            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/docker-compose.release.yml
+            TAG=${{ steps.meta.outputs.tag }} docker compose -f docker-compose.release.yml up -d
+            # then open http://localhost:8080
+            ```
+
+            Images:
+            - `${{ env.REGISTRY }}/${{ steps.meta.outputs.owner }}/nd3x-backend:${{ steps.meta.outputs.tag }}`
+            - `${{ env.REGISTRY }}/${{ steps.meta.outputs.owner }}/nd3x-frontend:${{ steps.meta.outputs.tag }}`

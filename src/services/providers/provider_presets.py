@@ -1,0 +1,88 @@
+"""Known cloud provider presets for the guided "add provider" flow.
+
+Static UI metadata (base URL, where to get an API key, what it's good for) so
+users pick a provider from a list instead of hand-typing a provider_type + URL.
+Includes cloud-hosted Llama options (Ollama Cloud / Groq / Together) which run
+open models on credit/cheap-per-token plans.
+"""
+from __future__ import annotations
+
+PRESETS = [
+    {
+        "key": "openai", "provider_type": "openai", "label": "OpenAI",
+        "description": "GPT-4o & o-series chat, embeddings, Whisper, TTS, realtime.",
+        "base_url": "https://api.openai.com/v1",
+        "api_key_url": "https://platform.openai.com/api-keys",
+        "needs_base_url": False, "is_local": False,
+        "capabilities": ["chat", "embeddings", "transcription", "tts", "realtime"],
+    },
+    {
+        "key": "anthropic", "provider_type": "anthropic", "label": "Anthropic",
+        "description": "Claude models — strong, reliable general agents.",
+        "base_url": "", "api_key_url": "https://console.anthropic.com/settings/keys",
+        "needs_base_url": False, "is_local": False, "capabilities": ["chat"],
+    },
+    {
+        "key": "gemini", "provider_type": "gemini", "label": "Google Gemini",
+        "description": "Gemini 1.5/2.0 — huge context windows, multimodal, cheap Flash tier.",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "api_key_url": "https://aistudio.google.com/apikey",
+        "needs_base_url": False, "is_local": False, "capabilities": ["chat", "embeddings"],
+    },
+    {
+        "key": "voyage", "provider_type": "voyage", "label": "Voyage AI",
+        "description": "High-quality retrieval embeddings.",
+        "base_url": "https://api.voyageai.com/v1",
+        "api_key_url": "https://dashboard.voyageai.com/",
+        "needs_base_url": False, "is_local": False, "capabilities": ["embeddings"],
+    },
+    {
+        "key": "ollama_cloud", "provider_type": "openai_compatible", "label": "Ollama Cloud (Llama)",
+        "description": "Cloud-hosted Llama & other open models on a monthly credit plan — "
+                       "often cheaper than per-token APIs.",
+        "base_url": "https://ollama.com/v1",
+        "api_key_url": "https://ollama.com/settings/keys",
+        "needs_base_url": False, "is_local": False, "capabilities": ["chat", "embeddings"],
+    },
+    {
+        "key": "groq", "provider_type": "openai_compatible", "label": "Groq (Llama, fast)",
+        "description": "Very fast Llama/Mixtral inference at low cost.",
+        "base_url": "https://api.groq.com/openai/v1",
+        "api_key_url": "https://console.groq.com/keys",
+        "needs_base_url": False, "is_local": False, "capabilities": ["chat"],
+    },
+    {
+        "key": "together", "provider_type": "openai_compatible", "label": "Together AI (Llama)",
+        "description": "Open models incl. Llama, cheap per-token.",
+        "base_url": "https://api.together.xyz/v1",
+        "api_key_url": "https://api.together.ai/settings/api-keys",
+        "needs_base_url": False, "is_local": False, "capabilities": ["chat", "embeddings"],
+    },
+    {
+        "key": "openai_compatible", "provider_type": "openai_compatible", "label": "Other OpenAI-compatible",
+        "description": "Any OpenAI-compatible endpoint — set the base URL yourself.",
+        "base_url": "", "api_key_url": "",
+        "needs_base_url": True, "is_local": False, "capabilities": ["chat", "embeddings"],
+    },
+    {
+        "key": "ollama", "provider_type": "ollama", "label": "Ollama (local)",
+        "description": "Run open models locally on this machine — no API key, no per-token cost.",
+        # Placeholder — get_presets() fills the effective host (OLLAMA_HOST env,
+        # e.g. the Docker sidecar, else localhost) at read time.
+        "base_url": "", "api_key_url": "",
+        "needs_base_url": False, "is_local": True, "capabilities": ["chat", "embeddings"],
+    },
+]
+
+
+def get_presets() -> list[dict]:
+    """PRESETS with the Ollama base_url resolved to the effective default host —
+    in a Docker deploy that is the compose sidecar (OLLAMA_HOST env), not the
+    container's own localhost."""
+    from services.local_models.ollama_client import DEFAULT_HOST
+    out: list[dict] = []
+    for p in PRESETS:
+        if p.get("key") == "ollama" and not p.get("base_url"):
+            p = {**p, "base_url": f"{DEFAULT_HOST}/v1"}
+        out.append(p)
+    return out

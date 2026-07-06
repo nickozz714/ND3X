@@ -1,0 +1,62 @@
+# ND3X — two-container deployment (frontend + backend) plus an Ollama sidecar.
+#
+#   web     nginx serving the built FE, proxying /api → api (browse http://localhost:8080)
+#   api     the FastAPI backend (API only; FE is served by `web`)
+#   ollama  local-model sidecar
+#
+# Local build expects the frontend repo checked out next to this one
+# (../lovely-landing-project). For a no-clone run, use docker-compose.release.yml,
+# which pulls published ghcr.io images instead of building.
+services:
+  web:
+    build:
+      context: ../lovely-landing-project
+      dockerfile: Dockerfile
+    container_name: nd3x-web
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nd3x-api
+    # 8088 is reachable inside the compose network (web proxies to it). Exposed on
+    # the host too for direct API access / debugging; remove if you don't need it.
+    ports:
+      - "8088:8088"
+    restart: unless-stopped
+    depends_on:
+      - ollama
+    environment:
+      # Base dir + config/secrets live on a persisted volume so first-time setup
+      # survives container restarts.
+      ND3X_HOME: /data/.nd3x
+      ND3X_BASE_DIR: /data
+      # Talk to the Ollama sidecar; its models live on the ollama_models volume.
+      OLLAMA_HOST: ollama:11434
+    volumes:
+      - nd3x_data:/data
+      # Host folder bind-mounted INTO the container so the agent's shell/python
+      # (which run inside this container) can read & write your real files, while
+      # code execution itself stays sandboxed in the container. Override the host
+      # path with ND3X_HOST_MOUNT (e.g. ND3X_HOST_MOUNT=~/Projects); defaults to
+      # your Documents. The agent sees these files at /data/host.
+      - ${ND3X_HOST_MOUNT:-${HOME}/Documents}:/data/host
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nd3x-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      # Pulled models persist here instead of in the container layer.
+      - ollama_models:/root/.ollama
+
+volumes:
+  nd3x_data:
+  ollama_models:

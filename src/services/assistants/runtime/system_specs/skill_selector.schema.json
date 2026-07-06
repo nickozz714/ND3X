@@ -1,0 +1,37 @@
+{
+    "type": "object",
+    "properties": {
+        "mode": {
+            "type": "string",
+            "enum": ["answer", "select", "ask_user"]
+        },
+        "reason": {
+            "type": "string"
+        },
+        "answer": {
+            "type": ["string", "null"]
+        },
+        "selected_skill_names": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "plan": {
+            "type": "array",
+            "description": "For mode='select': the ordered steps the agent will take to answer the request using the selected skill(s) and their tools. Each step is one short sentence. Empty for answer/ask_user.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "step": {"type": "integer"},
+                    "skill": {"type": "string"},
+                    "action": {"type": "string"}
+                },
+                "required": ["step", "skill", "action"],
+                "additionalProperties": false
+            }
+        }
+    },
+    "required": ["mode", "reason", "answer", "selected_skill_names", "plan"],
+    "additionalProperties": false
+}

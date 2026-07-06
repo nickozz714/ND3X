@@ -1,0 +1,91 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.conda/
+.venv*/
+
+# Distribution / packaging
+build/
+dist/
+downloads/
+.eggs/
+*.egg
+*.egg-info/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage*
+.cache/
+.pytest_cache/
+coverage.xml
+*.cover
+*.py,cover
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Django / Flask / FastAPI
+*.log
+local_settings.py
+instance/
+*.sqlite3
+
+# Mypy / Pyre / Pylint
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pylint.d/
+
+# IDE / Editor settings
+.vscode/
+.idea/
+.brain/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Misc
+*.env
+
+# Runtime job artifacts (ASK_JOB_ROOT / VOICE_JOB_ROOT). Anchored to the repo root
+# so the bare names don't also ignore source dirs like src/services/voice/.
+/ask/
+/voice/
+
+# Local database + runtime data (base dir lives outside the repo in normal use)
+*.db
+db/*.db
+files/
+logs/
+
+# Desktop packaging: staged frontend (build artifact) + keep the PyInstaller spec
+/src/web/
+!packaging/nd3x.spec
+
+# Keep the Tauri loading page (the global dist/ rule would hide it)
+!/desktop/dist/
+!/desktop/dist/index.html
+*.sqlite
+.env.local
+*.zip

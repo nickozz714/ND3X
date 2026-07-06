@@ -1,0 +1,3 @@
+# Build-only deps for the desktop package (not runtime). Install into .venv before
+# running packaging/build_desktop.sh.
+pyinstaller~=6.21

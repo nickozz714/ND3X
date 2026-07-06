@@ -1,0 +1,46 @@
+# ND3X — run the published images without cloning anything.
+#
+#   curl -LO <release-url>/docker-compose.release.yml
+#   TAG=0.5.0 docker compose -f docker-compose.release.yml up -d
+#   open http://localhost:8080
+#
+# TAG selects the image version (defaults to latest). Set ND3X_HOST_MOUNT to expose
+# a host folder to the agent (defaults to your Documents).
+services:
+  web:
+    image: ghcr.io/nickozz714/nd3x-frontend:${TAG:-latest}
+    container_name: nd3x-web
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  api:
+    image: ghcr.io/nickozz714/nd3x-backend:${TAG:-latest}
+    container_name: nd3x-api
+    ports:
+      - "8088:8088"
+    restart: unless-stopped
+    depends_on:
+      - ollama
+    environment:
+      ND3X_HOME: /data/.nd3x
+      ND3X_BASE_DIR: /data
+      OLLAMA_HOST: ollama:11434
+    volumes:
+      - nd3x_data:/data
+      - ${ND3X_HOST_MOUNT:-${HOME}/Documents}:/data/host
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nd3x-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+
+volumes:
+  nd3x_data:
+  ollama_models:

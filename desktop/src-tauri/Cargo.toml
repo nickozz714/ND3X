@@ -1,0 +1,18 @@
+[package]
+name = "nd3x-desktop"
+version = "0.1.0"
+description = "ND3X desktop shell"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+
+[features]
+# Used by `tauri build` for the production custom protocol.
+custom-protocol = ["tauri/custom-protocol"]
+default = ["custom-protocol"]

@@ -1,0 +1,181 @@
+{
+    "type": "object",
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": [
+                "tool_calls",
+                "final",
+                "ask_user",
+                "propose_plan",
+                "select_skills"
+            ]
+        },
+        "reason": {
+            "type": "string"
+        },
+        "say": {
+            "type": "string",
+            "description": "Short, user-facing running commentary for THIS step (chat only) — what you're about to do, what you just found, or an error you hit and how you're recovering. One sentence, plain language, addressed to the user. Use \"\" to stay silent on trivial or routine steps. Distinct from `reason` (your internal rationale). Ignored for autonomous workflow runs."
+        },
+        "selected_skill_names": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "For action='select_skills': the skill name(s) from the catalog to load before continuing. Empty for every other action."
+        },
+        "tool_calls": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "tool_id": {
+                        "type": "integer"
+                    },
+                    "tool": {
+                        "type": "string"
+                    },
+                    "kind": {
+                        "type": "string",
+                        "enum": [
+                            "code",
+                            "markdown"
+                        ]
+                    },
+                    "args": {
+                        "type": "object"
+                    },
+                    "reason": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "tool_id",
+                    "tool",
+                    "kind",
+                    "args",
+                    "reason"
+                ],
+                "additionalProperties": false
+            }
+        },
+        "response_mode": {
+            "type": "string",
+            "enum": [
+                "emit_handoff",
+                "return_file",
+                "synthesize_answer",
+                "evaluate_answer"
+            ]
+        },
+        "search_keywords": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
+        "final_answer": {
+            "type": [
+                "string",
+                "null"
+            ]
+        },
+        "downstream_handoff": {
+            "type": [
+                "object",
+                "null"
+            ],
+            "properties": {
+                "summary": {
+                    "type": "string"
+                },
+                "full_answer": {
+                    "type": [
+                        "string",
+                        "null"
+                    ]
+                },
+                "artifacts": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    }
+                },
+                "facts": {
+                    "type": "object"
+                },
+                "iterables": {
+                    "type": "object",
+                    "description": "Named iterable outputs for For Each workflow operations. Each key is an iterable name, and each value must be an array of plain JSON objects. Each object becomes the full input_payload for one child workflow run.",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                },
+                "open_questions": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "output_ref": {
+                    "type": [
+                        "object",
+                        "null"
+                    ],
+                    "properties": {
+                        "id": {
+                            "type": "string"
+                        },
+                        "kind": {
+                            "type": "string"
+                        },
+                        "chunk_count": {
+                            "type": "integer"
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "kind",
+                        "chunk_count"
+                    ],
+                    "additionalProperties": false
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "success",
+                        "partial",
+                        "failed"
+                    ]
+                }
+            },
+            "required": [
+                "summary",
+                "full_answer",
+                "artifacts",
+                "facts",
+                "iterables",
+                "open_questions",
+                "output_ref",
+                "status"
+            ],
+            "additionalProperties": false
+        }
+    },
+    "required": [
+        "action",
+        "reason",
+        "say",
+        "tool_calls",
+        "response_mode",
+        "search_keywords",
+        "final_answer",
+        "downstream_handoff"
+    ],
+    "additionalProperties": false
+}

@@ -1,0 +1,6 @@
+# Rust / Tauri build output
+src-tauri/target/
+# Tauri-generated schemas/code
+src-tauri/gen/
+# Staged backend sidecar (large, produced by build_app.sh)
+src-tauri/binaries/

@@ -1,0 +1,8 @@
+{
+  "orchestrator_completion_integrity_contract": "Global rules to prevent false completion claims for mutations and deliverables.",
+  "orchestrator_downstream_handoff_contract": "Global rules for producing compact downstream_handoff objects for later workflow steps.",
+  "orchestrator_response_contract": "Global planner response rules for action, response_mode and final_answer behavior.",
+  "orchestrator_tool_call_contract": "Global rules for safe and valid orchestrator tool calls.",
+  "orchestrator_workflow_context_contract": "Global rules for using workflow context and previous step outputs.",
+  "runtime_file_artifact_inspection": "Runtime skill automatically injected by the orchestrator when file artifacts, content references, downloaded files, generated files, or file inspection intent are present."
+}

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ND3X</title>
+    <style>
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: flex; align-items: center; justify-content: center;
+        background: #0f1115; color: #cdd3df;
+        font: 14px/1.5 -apple-system, Segoe UI, Roboto, sans-serif;
+      }
+      .box { text-align: center; }
+      .spinner {
+        width: 28px; height: 28px; margin: 0 auto 14px;
+        border: 3px solid #2a2f3a; border-top-color: #6ea8fe;
+        border-radius: 50%; animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .muted { color: #7b8494; font-size: 12px; margin-top: 6px; }
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <div class="spinner"></div>
+      <div>Starting ND3X…</div>
+      <div class="muted">launching the local engine</div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,130 @@
+{
+    "type": "object",
+    "properties": {
+        "mode": {
+            "type": "string",
+            "enum": [
+                "single",
+                "multi",
+                "ask_user",
+                "direct_answer",
+                "workflow_offer",
+                "workflow_trigger"
+            ]
+        },
+        "reason": {
+            "type": "string"
+        },
+        "answer": {
+            "type": [
+                "string",
+                "null"
+            ]
+        },
+        "stay_with_current_assistant": {
+            "type": "boolean"
+        },
+        "selected_assistant_ids": {
+            "type": "array",
+            "items": {
+                "type": "integer"
+            }
+        },
+        "workflow_id": {
+            "type": [
+                "integer",
+                "null"
+            ]
+        },
+        "input_payload": {
+            "type": "object"
+        },
+        "steps": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "step": {
+                        "type": "integer"
+                    },
+                    "assistant_id": {
+                        "type": "integer"
+                    },
+                    "assistant_name": {
+                        "type": "string"
+                    },
+                    "skill_names": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "goal": {
+                        "type": "string"
+                    },
+                    "question_for_assistant": {
+                        "type": "string"
+                    },
+                    "depends_on": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    },
+                    "requires_previous_output": {
+                        "type": "boolean"
+                    },
+                    "requires_previous_output_detail": {
+                        "type": "boolean"
+                    },
+                    "previous_output_from_steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    },
+                    "router_after_step": {
+                        "type": "boolean"
+                    },
+                    "reason": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "step",
+                    "assistant_id",
+                    "assistant_name",
+                    "skill_names",
+                    "goal",
+                    "question_for_assistant",
+                    "depends_on",
+                    "requires_previous_output",
+                    "requires_previous_output_detail",
+                    "previous_output_from_steps",
+                    "router_after_step",
+                    "reason"
+                ],
+                "additionalProperties": false
+            }
+        },
+        "ask_user": {
+            "type": [
+                "string",
+                "null"
+            ]
+        }
+    },
+    "required": [
+        "mode",
+        "reason",
+        "answer",
+        "stay_with_current_assistant",
+        "selected_assistant_ids",
+        "workflow_id",
+        "input_payload",
+        "steps",
+        "ask_user"
+    ],
+    "additionalProperties": false
+}

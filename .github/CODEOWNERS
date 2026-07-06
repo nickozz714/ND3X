@@ -1,0 +1,4 @@
+# Every change requires review + approval from the maintainer.
+# Combined with branch protection on `main` (require a review from Code Owners),
+# this ensures nothing merges without the maintainer's explicit approval.
+* @nickozz714
