@@ -1,0 +1,41 @@
+name: Sync wiki
+
+# Mirror docs/guide/ into the GitHub wiki whenever the guide changes on main.
+on:
+  push:
+    branches: [main]
+    paths: ["docs/guide/**", ".github/scripts/sync-wiki.sh"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki-sync
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone the wiki
+        run: |
+          git clone "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.wiki.git" wiki
+
+      - name: Mirror guide → wiki
+        run: bash .github/scripts/sync-wiki.sh "$PWD/wiki"
+
+      - name: Commit + push
+        working-directory: wiki
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki already up to date."
+          else
+            git commit -m "Sync guide from ${{ github.sha }}"
+            git push
+          fi
