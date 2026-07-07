@@ -29,9 +29,8 @@ straight onto it — there is no list and no "new assistant" button.
 
 ### 1. The instruction (the agent's personality & rules)
 
-The agent's system instruction is **file-backed**: it lives in the repo at
-`src/services/assistants/runtime/system_specs/agent.instruction.md`, but you edit it
-**through the UI**. Saving in Agent Settings writes that file (Expert/Admin only).
+You edit the agent's system instruction **through the UI**: saving in Agent Settings
+persists it (Expert/Admin only). It's the durable, always-on part of the agent.
 
 Use the instruction for durable, always-on guidance: tone, language, formatting
 preferences, house rules ("always cite sources", "never expose secrets"), and how to

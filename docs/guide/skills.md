@@ -79,11 +79,8 @@ Instructions are loaded only when the skill is selected, so be specific and gene
 
 ## Health flags to watch
 
-The Skills list flags two problems:
-
-- **No tools linked** — the skill can be selected but can't act. Attach tools.
-- **(legacy) Not linked to any assistant** — irrelevant under the single-agent model;
-  selection is driven by the enabled-skill catalog, not per-assistant links.
+The Skills list flags a skill with **No tools linked** — it can be selected but can't
+act. Attach the tools it needs.
 
 ## Lifecycle
 

@@ -92,3 +92,10 @@ tool and PDF export use these). Grid of templates with a detail/edit view.
 A console for **guarded shell execution**. Commands are backend-guarded and require
 confirmation before they run — the same safety that applies when the agent uses
 `system__shell_exec` ([tools.md](tools.md)). Use for diagnostics and runtime automation.
+
+### Transfers
+The **Transfer Hub** — move files between systems without hand-rolling scripts. Pick
+**connectors** (local file, SFTP, Azure Blob / File Share, SharePoint, OneLake, and
+more), wire them into a **route** with a visual builder, and run it on demand or on a
+**schedule**. Credentials are referenced by name and stored **encrypted**. The agent
+can also drive transfers itself through transfer tools and a route-building skill.
