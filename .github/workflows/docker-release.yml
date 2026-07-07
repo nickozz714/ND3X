@@ -5,7 +5,7 @@ name: Docker release
 # counterpart to desktop-build.yml (OS installers) — a separate release line.
 #
 # Triggers:
-#   - push a tag `docker-v*` (e.g. docker-v0.5.0)  → tagged images + a release
+#   - push a tag `v*` (e.g. v0.5.0)  → tagged images attached to that release
 #   - manual run (Actions ▸ Docker release ▸ Run workflow) — pick tag + frontend ref
 #
 # Secrets:
@@ -13,7 +13,7 @@ name: Docker release
 #   GHCR auth uses the built-in GITHUB_TOKEN (needs packages: write, set below).
 on:
   push:
-    tags: ["docker-v*"]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -38,8 +38,8 @@ jobs:
       - name: Resolve version + owner
         id: meta
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/docker-v* ]]; then
-            TAG="${GITHUB_REF#refs/tags/docker-v}"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/v}"
           else
             TAG="${{ github.event.inputs.tag }}"
           fi
@@ -89,7 +89,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ steps.meta.outputs.owner }}/nd3x-frontend:latest
 
       - name: Attach compose to the release (on tag)
-        if: startsWith(github.ref, 'refs/tags/docker-v')
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: ND3X/docker-compose.release.yml

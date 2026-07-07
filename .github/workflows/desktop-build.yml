@@ -5,7 +5,7 @@ name: Desktop build
 # bundling it in the Tauri shell — i.e. ND3X/desktop/build_app.sh on each OS.
 #
 # Triggers (a "fresh build when FE or BE gets a new version"):
-#   - push a tag `desktop-v*` here (use desktop/release.sh)        → BE release
+#   - push a tag `v*` here → installers attached to that release
 #   - repository_dispatch {type: fe-release} from the frontend repo → FE release
 #   - manual run (Actions ▸ Desktop build ▸ Run workflow)
 #
@@ -19,7 +19,7 @@ on:
         description: "Frontend git ref to build (branch/tag/sha)"
         default: "main"
   push:
-    tags: ["desktop-v*"]
+    tags: ["v*"]
   repository_dispatch:
     types: [fe-release]
 
