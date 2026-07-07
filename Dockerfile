@@ -26,11 +26,12 @@ RUN apt-get update \
     fontconfig \
     poppler-utils \
     chromium \
+    unzip \
     fonts-open-sans \
  && \
     curl -sL https://aka.ms/InstallAzureCLIDeb | bash \
  && \
-    npm install -g @mermaid-js/mermaid-cli \
+    PUPPETEER_SKIP_DOWNLOAD=true npm install -g @mermaid-js/mermaid-cli \
  && \
     pip install --no-cache-dir pandoc-mermaid-filter \
  && rm -rf /var/lib/apt/lists/*
@@ -42,7 +43,7 @@ COPY src/ /app/src/
 
 ENV FFMPEG_BIN=/usr/bin/ffmpeg \
     FFPROBE_BIN=/usr/bin/ffprobe \
-    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_SKIP_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 EXPOSE 8088
