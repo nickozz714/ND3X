@@ -22,6 +22,18 @@ Because the agent selects by **description**, the quality of your skill descript
 the single biggest lever on whether it picks the right capability. See
 [skills.md](skills.md).
 
+## Background tasks
+
+For longer sub-jobs the agent can start a **background task** (also reachable with the
+`/task` slash command). The task runs on its own while your turn continues, and its
+result is folded back into the thread automatically when it finishes — you don't have
+to poll for it. A background task is a full agent run in its own right, so it can select
+skills and use tools like any turn.
+
+> On a **local model**, background tasks share the model's single queue, so running
+> several at once won't be faster — point a task at a **different** model (a cloud model,
+> or a second smaller local one) for real parallelism.
+
 ## Agent Settings tab
 
 Open **AI Workbench → Agent Settings**. Because there is only one agent, this opens

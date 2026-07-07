@@ -10,9 +10,9 @@ system skills, and how the agent selects skills.
 > screen-by-screen docs for the agent, skills, tools, MCP servers, workflows, AI models
 > (cost vs performance), usage, users, and every desktop tile.
 >
-> **Looking for the internals?** See [`docs/PLATFORM.md`](docs/PLATFORM.md) for the
-> extended capability reference — single-agent orchestration, skills→tools, workflows,
-> cognition/memory, model routing, voice, and platform services, with file citations.
+> **Want the mental model?** See [**How ND3X works**](docs/guide/how-it-works.md) — one
+> agent, skills→tools, workflows, cognition/memory, model routing, voice, and platform
+> services, explained conceptually.
 
 > Models are never hard-coded. Every stage resolves its model from a routing slot;
 > an unassigned slot means that capability is explicitly *not available* (a clear
@@ -35,20 +35,17 @@ opens a setup wizard that:
    is offered for small/local models,
 4. **generates and persists** the secrets (JWT + Fernet keys).
 
-On every start an **idempotent first-run bootstrap** (`db/bootstrap.py`,
-`run_bootstrap`) ensures the minimum a fresh/empty database needs to be usable —
-the Builtin MCP server, the system/runtime skill rows, the always-on builtin tools,
-and a **default planner agent** — created only-if-missing. This does *not* restore
-the old broad seeding (the DB stays authoritative); it just guarantees a brand-new
-install (e.g. a fresh Docker/Flux deploy) is not empty. Covered by
-`tests/test_fresh_install_bootstrap.py`.
+On every start an **idempotent first-run bootstrap** ensures the minimum a fresh/empty
+database needs to be usable — the Builtin MCP server, the system/runtime skills, the
+always-on builtin tools, and a **default agent** — created only-if-missing. It just
+guarantees a brand-new install (e.g. a fresh Docker deploy) is not empty; the database
+stays authoritative from then on.
 
 ### Where configuration lives
 - **Almost everything is in the database** — providers/models/slots, the admin
   user, and all operational settings (limits, intervals, logging, file roots,
-  MCP, Ollama, agent budgets, …) via the settings registry
-  (`services/app_settings_registry.py`), editable under Application Settings →
-  *System configuration*. At startup these are hydrated into the in-memory config;
+  MCP, Ollama, agent budgets, …) via the settings registry, editable under
+  Application Settings → *System configuration*. At startup these are hydrated into the in-memory config;
   an env var of the same name still overrides (ops escape hatch).
 - **Only the irreducible minimum is on disk**, under `<base>/.nd3x/`:
   `bootstrap.json` (base dir + DB connection) and `secrets.json` (chmod 600 —
@@ -178,27 +175,26 @@ Guiding rules the agent follows:
 
 ## Platform capabilities
 
-Beyond the core single-agent loop, the runtime ships a broad set of
-operator-facing capabilities. The table below is a pointer index; the
-[**User & Operator Guide**](docs/guide/README.md) and
-[`docs/PLATFORM.md`](docs/PLATFORM.md) carry the detail.
+Beyond the core single-agent loop, ND3X ships a broad set of user-facing
+capabilities. The [**User & Operator Guide**](docs/guide/README.md) explains each one
+screen by screen; this is the quick index.
 
-| Capability | What it does | Key entry points |
-|------------|--------------|------------------|
-| **Chat attachments + retrieval** | Attach files/images per message (max 5 × 10 MB). Per-thread, dimension-aware **FAISS** vector store: chunks embedded via the embeddings slot, L2-normalised, retrieved by cosine similarity; keyword fallback without FAISS/embeddings. Native provider file-search is used where available (OpenAI vector store, Gemini File Search, Anthropic document blocks). | `services/chat_attachment_service.py`, `services/local_attachment_vector_store.py`; `POST /api/main/ask/attachments` |
-| **Context compaction** | Summarises a thread and resets the chain when the active chat slot's context window nears its limit, so long threads keep running. | `services/compaction_service.py`; `POST /api/usage/thread/{id}/compact` |
-| **Important messages** | Flag a message to force a cognition pass (memory/belief/curiosity) even when the turn looks trivial. | `POST …/threads/{id}/messages/{mid}/important` |
-| **Thread / project delete** | Cascading delete of threads & projects (messages + compaction), optionally the associated memories/beliefs/curiosity jobs. | `DELETE …/threads/{id}`, `DELETE …/projects/{id}` |
-| **Cognition** | Long-term memories, beliefs, and curiosity jobs, queryable per thread and per project. | `services/system_cognition/`; `GET /api/system-cognition/{memories\|beliefs\|curiosity-jobs}` |
-| **Usage truth-layer** | Per-thread, per-provider, per-model token & cost accounting, reconciled against provider-reported actuals; per-chat insights. | `services/provider_usage_service.py`, `usage_service.py`; `GET /api/usage/…` |
-| **Agent narration / Auto-mode** | Live step/tool-call narration, a `propose_plan` action with an approval flow, and an auto-decider for autonomous turns. | `services/auto_decision_service.py`; `POST /api/main/auto-decide` |
-| **Voice & live transcription** | Transcription (with diarization) and a live meeting lane producing structured markdown notes. | `services/voice/`; `POST /api/main/voice/…`, `…/voice/live/{start\|chunk\|stop}` |
-| **Meeting profiles** | DB-defined meeting profiles (instructions / language / output template / action policy) that plug into the voice-profile registry; live read-only action-detection lane. | `services/voice/meeting_profile_service.py`, `meeting_action_service.py`; `…/meeting-profiles`, `…/voice/live/{t}/{r}/actions` |
-| **Transfer Hub** | Native Python file-transfer orchestration: connector registry (file/SFTP/Azure Blob/File Share/SharePoint/OneLake/fsspec + runtime-defined types), dynamic route factory, credential-by-reference (Fernet-encrypted), scheduling, and LLM-drivable transfer tools + a route-building skill. | `services/transfer/`; `…/transfer/…` |
-| **Fabric Data Agents** | Query Microsoft Fabric Data Agents. Auth per agent: service principal, an Azure CLI session (`az`), a stored bearer token, or an interactive browser login (desktop app only). | `services/fabric/fabric_data_agent_service.py`; `…/admin/fabric-data-agents/…` |
-| **KeyVault (secrets)** | Fernet-encrypted secret store; `.env` bulk import; plaintext is never returned by the API (metadata + obfuscated value only). Workflow `http_request` injects `${secret.NAME}` server-side at the outbound boundary and masks it in traces, so the model never sees the value. | `services/secret_service.py`, `routers/secrets.py`; `…/admin/secrets/…` |
-| **Admin toggles** | Enable/disable builtin tools and system/runtime skills from the UI; Azure-login helpers. | `routers/builtin.py`, `routers/skills.py` |
-| **Bundled binaries on PATH** | At startup, bundled `ffmpeg`/`pandoc`/`poppler` etc. are prepended to PATH (`packaging/bin/<os>-<arch>/`), degrading gracefully when absent. | `component/runtime_binaries.py` |
+| Capability | What it does |
+|------------|--------------|
+| **Chat attachments + retrieval** | Attach files and images per message (up to 5 × 10 MB). They're indexed into a per-thread search store so the agent retrieves the relevant parts; native provider file-search is used where available. |
+| **Context compaction** | Summarises a thread when its context window nears the limit, so long conversations keep running. |
+| **Important messages** | Flag a message to force a memory/cognition pass even when the turn looks trivial. |
+| **Thread / project delete** | Cleanly delete threads and projects (and optionally their memories, beliefs and curiosity jobs). |
+| **Cognition** | Long-term memories, beliefs, and curiosity/research, queryable per thread and per project. |
+| **Usage truth-layer** | Per-thread, per-model token & cost accounting, reconciled against what providers actually report. |
+| **Agent narration / Auto-mode** | Live step-by-step narration, a propose-a-plan approval flow, and an auto-decider for autonomous turns. |
+| **Voice & live transcription** | Transcription (with speaker diarization) and a live meeting lane producing structured notes. |
+| **Meeting profiles** | Profiles that shape how meetings become notes (instructions / language / output template / action policy), with a live action-detection lane. |
+| **Transfer Hub** | Move files between systems (local, SFTP, Azure Blob / File Share, SharePoint, OneLake, and more) via a visual route builder, on demand or scheduled, with encrypted credentials. |
+| **Fabric Data Agents** | Query Microsoft Fabric Data Agents in natural language (service-principal, Azure CLI, bearer-token, or interactive-browser auth). |
+| **KeyVault (secrets)** | Encrypted secret store with `.env` bulk import; secrets are used in workflows as `${secret.NAME}` without ever being shown to the model. |
+| **Admin toggles** | Enable/disable built-in tools and system skills from the UI, plus Azure-login helpers. |
+| **Bundled binaries** | Bundled `ffmpeg` / `pandoc` / `poppler` etc. are put on PATH at startup, degrading gracefully when absent. |
 
 ## At a glance
 

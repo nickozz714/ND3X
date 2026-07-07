@@ -48,6 +48,23 @@ empty. Optional slots simply **disable their feature** when empty — there is n
 hard-coded fallback to some default model. "No model assigned" means "that capability is
 off," by design.
 
+## Light mode (small & local models)
+
+Small and local models spend most of their time reading the prompt, so ND3X can send
+them a **compact prompt** — "light mode" — that keeps them responsive without changing
+what they can do. Selected skills still get their full tool details; only the always-on
+scaffolding is trimmed.
+
+- **Automatic:** on for local models, off for cloud models.
+- **Per model:** override it under **AI Models → Routing** (prompt mode: *full* /
+  *light* / *auto*).
+- **Per workflow operation:** an agent step can force light mode on or off (see
+  [workflows.md](workflows.md)).
+
+If a small model occasionally gets a tool's arguments wrong in light mode, the normal
+tool-error recovery corrects it; selecting the relevant skill always gives it the full
+details.
+
 ## Optimising for cost vs performance
 
 The system makes ~one cheap selection call + an execution/answer phase per turn (plus

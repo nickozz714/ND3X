@@ -4,9 +4,9 @@ This guide explains how to **use and operate** the ND3X platform: the AI agent, 
 build skills and tools, how to connect MCP servers, how to design workflows, how to
 configure AI models for cost or performance, and what every tile in the desktop does.
 
-For the **developer/internals** view (turn flow, contracts, code citations) see
-[`../PLATFORM.md`](../PLATFORM.md). This guide is the day-to-day, screen-by-screen
-companion to that reference.
+New here? Read [**How ND3X works**](how-it-works.md) for the mental model — one agent,
+skills, tools, workflows, memory and model routing — then use this guide screen by
+screen.
 
 > Custom domain apps — the **Project Management** and **Fitness Coach** (Lifestyle)
 > tiles — are bespoke and intentionally **not** documented here; this guide covers the
