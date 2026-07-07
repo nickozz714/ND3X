@@ -190,8 +190,8 @@ class PromptBuilder:
                 continue
 
             # Light mode: the verbose orchestrator_* contracts are replaced by the
-            # distilled LIGHT_MODE_CONTRACT block that build_planner_prompt injects
-            # (see docs/light-mode.md). Other system/runtime skills stay.
+            # distilled LIGHT_MODE_CONTRACT block that build_planner_prompt injects.
+            # Other system/runtime skills stay.
             if light and is_system and skill.name.startswith("orchestrator_"):
                 continue
 
@@ -627,7 +627,7 @@ class PromptBuilder:
         is_workflow = bool(payload.get("_workflow_background"))
         # Light mode (small/local models): compact prompt — prefill dominates their
         # step latency. Resolved per turn by the pipeline (per-model prompt_mode,
-        # auto = local). See docs/light-mode.md for exactly what is shortened.
+        # auto = local).
         light = bool(payload.get("_light_mode"))
         # The always-on builtin manifest is NOT inlined here — the pipeline puts it in
         # the system instructions so it's sent once per request (not re-embedded in

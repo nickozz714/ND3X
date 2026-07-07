@@ -60,8 +60,7 @@ EXTRA_GUIDANCE_PRIMER: str = _load_text("agent.instruction.guidance.md")
 
 # Light mode: distilled core contract that replaces the verbose orchestrator_*
 # system-skill contracts in the planner prompt for small/local models (prompt
-# size dominates their step latency). See docs/light-mode.md for what is
-# shortened or omitted versus full mode.
+# size dominates their step latency).
 LIGHT_MODE_CONTRACT: str = _load_text("agent.instruction.light.md")
 
 # Goal mode (/goal): keep working until the goal is DEMONSTRABLY achieved (or

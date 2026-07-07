@@ -4,7 +4,7 @@ payload['_light_mode'] is resolved per-turn by the pipeline (per-model
 prompt_mode, auto = local) and drives: distilled core contract instead of the
 orchestrator_* system contracts, brief tool manifests instead of full arg
 schemas (except actively selected skills), a one-line schema summary instead of
-the full schema dump, and no capabilities primer. See docs/light-mode.md.
+the full schema dump, and no capabilities primer.
 """
 from __future__ import annotations
 
