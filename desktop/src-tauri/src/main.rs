@@ -50,6 +50,12 @@ fn main() {
                 .env("ND3X_HOST", "127.0.0.1")
                 .env("ND3X_PORT", PORT.to_string())
                 .env("ND3X_HOME", nd3x_home.to_string_lossy().to_string())
+                .env("ND3X_BASE_DIR", nd3x_home.to_string_lossy().to_string())
+                // Run the backend FROM the per-user data dir: it writes some paths
+                // (logs/, files/, db/) relative to the working directory, and a
+                // Finder-launched app inherits CWD "/" (read-only) → the engine would
+                // crash on startup. This makes those writes land in a writable place.
+                .current_dir(nd3x_home.clone())
                 // Mark this as the local desktop app so the backend can offer
                 // interactive browser login (loopback redirect works here).
                 .env("ND3X_DESKTOP", "1")
