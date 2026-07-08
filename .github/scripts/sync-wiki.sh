@@ -28,6 +28,7 @@ cat > "$WIKI/_Sidebar.md" <<'EOF'
 ### ND3X Guide
 
 - [Home](Home)
+- [Installing ND3X](install)
 - [How ND3X works](how-it-works)
 
 **AI Workbench**

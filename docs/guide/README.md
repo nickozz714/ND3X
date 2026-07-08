@@ -4,7 +4,8 @@ This guide explains how to **use and operate** the ND3X platform: the AI agent, 
 build skills and tools, how to connect MCP servers, how to design workflows, how to
 configure AI models for cost or performance, and what every tile in the desktop does.
 
-New here? Read [**How ND3X works**](how-it-works.md) for the mental model — one agent,
+First install it — see [**Installing ND3X**](install.md) (desktop app or Docker). New
+here? Read [**How ND3X works**](how-it-works.md) for the mental model — one agent,
 skills, tools, workflows, memory and model routing — then use this guide screen by
 screen.
 
