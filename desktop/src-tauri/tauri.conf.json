@@ -32,7 +32,8 @@
     ],
     "externalBin": ["binaries/nd3x-backend"],
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "entitlements": "entitlements.plist"
     }
   }
 }

@@ -37,4 +37,30 @@ echo "==> 4/4 Build Tauri app"
 # fails in headless/non-GUI sessions. Override with CI= for the prettier layout in
 # an interactive session.
 ( cd "$HERE/src-tauri" && CI="${CI:-true}" cargo tauri build )
+
+# macOS: the bundled backend is a PyInstaller binary that, at launch, extracts and
+# loads its own Python.framework (a different Team ID). Under Hardened Runtime,
+# library validation rejects that and the backend is killed on start. Re-sign the
+# sidecar + app with an entitlement that disables library validation, then rebuild
+# the dmg from the fixed app so the installer carries it. (Belt-and-suspenders on
+# top of tauri.conf's entitlements, which may not reach the sidecar.)
+if [[ "$TRIPLE" == *apple-darwin* ]]; then
+  APP="$(ls -d "$HERE"/src-tauri/target/release/bundle/macos/*.app 2>/dev/null | head -1)"
+  ENT="$HERE/src-tauri/entitlements.plist"
+  if [ -n "$APP" ] && [ -f "$ENT" ]; then
+    echo "==> macOS: re-sign sidecar + app with library-validation entitlement"
+    codesign --force --sign - --entitlements "$ENT" --options runtime "$APP/Contents/MacOS/nd3x-backend"
+    codesign --force --sign - --entitlements "$ENT" --options runtime "$APP"
+    DMG="$(ls "$HERE"/src-tauri/target/release/bundle/dmg/*.dmg 2>/dev/null | head -1)"
+    if [ -n "$DMG" ]; then
+      echo "==> macOS: rebuild dmg from the re-signed app ($(basename "$DMG"))"
+      STAGING="$(mktemp -d)"
+      cp -R "$APP" "$STAGING/"
+      ln -s /Applications "$STAGING/Applications"
+      rm -f "$DMG"
+      hdiutil create -volname "ND3X" -srcfolder "$STAGING" -ov -format UDZO "$DMG" >/dev/null
+      rm -rf "$STAGING"
+    fi
+  fi
+fi
 echo "==> Done — installers in desktop/src-tauri/target/release/bundle/"
