@@ -98,6 +98,18 @@ jobs:
         # package-lock.json drifts; install reconciles from package.json.
         run: cd lovely-landing-project && npm install --no-audit --no-fund
 
+      - name: Set app version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        # So installer filenames track the release (e.g. ND3X_0.1.2_…) instead of
+        # the static tauri.conf version.
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          f="ND3X/desktop/src-tauri/tauri.conf.json"
+          tmp="$(mktemp)"
+          jq --arg v "$TAG" '.version = $v' "$f" > "$tmp" && mv "$tmp" "$f"
+          echo "Desktop app version set to $TAG"
+
       - name: Build desktop app (FE → freeze backend → Tauri bundle)
         shell: bash
         run: bash ND3X/desktop/build_app.sh
