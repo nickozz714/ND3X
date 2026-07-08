@@ -115,7 +115,7 @@ jobs:
             ND3X/desktop/src-tauri/target/release/bundle/deb/*.deb
 
       - name: Attach to release (on tag)
-        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: |
