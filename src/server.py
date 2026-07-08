@@ -42,10 +42,21 @@ def add_security_headers(
         resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["Referrer-Policy"] = "no-referrer"
         resp.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+        # The backend also serves the built SPA on a single origin (desktop app /
+        # bundled deploys), so the policy must allow the frontend's own assets.
+        # API-only deploys (FE behind nginx) are unaffected — these apply to JSON.
         resp.headers["Content-Security-Policy"] = (
-            "default-src 'none'; "
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; "
+            "font-src 'self' data:; "
+            "connect-src 'self' https: wss:; "
+            "worker-src 'self' blob:; "
+            "manifest-src 'self'; "
+            "media-src 'self' blob: data:; "
             "frame-ancestors 'none'; "
-            "base-uri 'none'; "
+            "base-uri 'self'; "
             "form-action 'self'"
         )
         return resp
