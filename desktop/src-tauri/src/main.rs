@@ -70,16 +70,22 @@ fn main() {
             });
 
             // Once the backend is listening, point the (loading) window at it.
+            // The frozen backend cold-starts (unpack + heavy imports), so allow a
+            // generous window; on timeout, surface a hint instead of hanging silently.
             std::thread::spawn(move || {
-                if wait_for_port(PORT, Duration::from_secs(90)) {
-                    if let Some(win) = handle.get_webview_window("main") {
+                let ready = wait_for_port(PORT, Duration::from_secs(240));
+                if let Some(win) = handle.get_webview_window("main") {
+                    if ready {
                         let url = format!("http://127.0.0.1:{PORT}/");
                         if let Ok(parsed) = url.parse() {
                             let _ = win.navigate(parsed);
                         }
+                    } else {
+                        eprintln!("[desktop] backend did not become ready within 240s");
+                        let _ = win.eval(
+                            r#"document.body.innerHTML = "<div style='font-family:system-ui;max-width:640px;margin:12vh auto;padding:0 1.5rem;color:#ddd'><h2>The local engine didn't start</h2><p>The bundled backend didn't become ready in time. On macOS this is usually Gatekeeper blocking the app because it isn't signed.</p><p>Open <b>Terminal</b> and run:</p><pre style='background:#000;padding:.75rem;border-radius:6px;overflow:auto'>codesign --force --deep --sign - /Applications/ND3X.app</pre><p>then reopen ND3X.</p></div>";"#,
+                        );
                     }
-                } else {
-                    eprintln!("[desktop] backend did not become ready within 90s");
                 }
             });
 

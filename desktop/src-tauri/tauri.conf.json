@@ -30,6 +30,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/nd3x-backend"]
+    "externalBin": ["binaries/nd3x-backend"],
+    "macOS": {
+      "signingIdentity": "-"
+    }
   }
 }

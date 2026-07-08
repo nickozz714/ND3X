@@ -23,13 +23,15 @@ them as *damaged*. **The file is fine — it’s just unsigned.** To run it:
    ```
 3. Open it (double-click, or right-click → **Open**).
 
-If it still won’t open, ad-hoc re-sign it and try again:
+If it still won’t open, or it **opens but hangs on “launching the local engine”**,
+ad-hoc re-sign the whole app (this also signs the bundled backend, which macOS
+otherwise blocks) and reopen:
 ```bash
 codesign --force --deep --sign - /Applications/ND3X.app
 ```
 
-> This is only needed for the **downloaded** app. A future signed & notarized build
-> will remove the step.
+> This is only needed for **older downloads**. Builds from v0.1.1 on are ad-hoc signed
+> automatically, so this step isn’t required.
 
 ## Docker
 
