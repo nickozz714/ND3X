@@ -102,6 +102,22 @@ fn main() {
                 if let Some(child) = window.state::<Backend>().0.lock().unwrap().take() {
                     let _ = child.kill();
                 }
+                // The backend is a PyInstaller onefile (a bootloader that spawns the
+                // real Python process). Killing the child above only reaps the
+                // bootloader; the Python process can orphan and keep the port. Make
+                // sure it's gone so the engine doesn't linger after the app quits.
+                #[cfg(unix)]
+                {
+                    let _ = std::process::Command::new("pkill")
+                        .args(["-f", "nd3x-backend"])
+                        .status();
+                }
+                #[cfg(windows)]
+                {
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/F", "/IM", "nd3x-backend.exe"])
+                        .status();
+                }
             }
         })
         .run(tauri::generate_context!())
