@@ -23,12 +23,14 @@ PRESETS = [
         "needs_base_url": False, "is_local": False, "capabilities": ["chat"],
     },
     {
+        # NOT is_local: only the CLI binary runs locally — the models are cloud
+        # (subscription). is_local would hide it from the FE cloud-preset list
+        # and trigger local-model treatment (light prompts) it doesn't need.
         "key": "claude_code", "provider_type": "claude_code", "label": "Claude Code (CLI)",
         "description": "Runs the local Claude Code CLI on your Claude subscription — no per-token "
-                       "cost. Paste the token from `claude setup-token` as the API key "
-                       "(leave empty to use the machine's `claude` login).",
+                       "cost. Paste the token from `claude setup-token` as the API key.",
         "base_url": "", "api_key_url": "",
-        "needs_base_url": False, "is_local": True, "capabilities": ["chat"],
+        "needs_base_url": False, "is_local": False, "capabilities": ["chat"],
     },
     {
         "key": "gemini", "provider_type": "gemini", "label": "Google Gemini",
