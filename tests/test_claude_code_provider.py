@@ -15,6 +15,8 @@ import pytest
 import services.providers.claude_code_provider as ccp
 from services.providers.claude_code_provider import (
     NON_AGENTIC_DISALLOWED_TOOLS,
+    NON_AGENTIC_INSTRUCTION,
+    NON_AGENTIC_MAX_TURNS,
     ClaudeCodeChatProvider,
     _to_prompt,
 )
@@ -129,9 +131,14 @@ def test_build_cmd_plain_chat_mode():
     cmd = p._build_cmd("sonnet", "instructies")
     assert cmd[:2] == ["claude", "-p"]
     assert ["--model", "sonnet"] == cmd[2:4]
-    assert "--append-system-prompt" in cmd and "instructies" in cmd
-    assert ["--max-turns", "1"] == cmd[cmd.index("--max-turns"):cmd.index("--max-turns") + 2]
+    system = cmd[cmd.index("--append-system-prompt") + 1]
+    # The no-tools instruction rides along so the model doesn't burn turns
+    # on (denied) tool attempts.
+    assert system.startswith("instructies") and NON_AGENTIC_INSTRUCTION in system
+    assert ["--max-turns", str(NON_AGENTIC_MAX_TURNS)] == \
+        cmd[cmd.index("--max-turns"):cmd.index("--max-turns") + 2]
     assert NON_AGENTIC_DISALLOWED_TOOLS in cmd
+    assert "--strict-mcp-config" in cmd
     assert "--permission-mode" not in cmd
 
 
@@ -164,6 +171,21 @@ def test_build_env_strips_api_key_and_injects_token(monkeypatch):
     assert env["PATH"] == "/usr/bin"
     # No token stored -> no var; host login (~/.claude) takes over.
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in ClaudeCodeChatProvider()._build_env()
+
+
+def test_build_env_strips_nested_claude_code_session(monkeypatch):
+    # ND3X launched from inside a Claude Code session (dev): the nested CLI
+    # must not inherit that session's harness (it injects extra tools the
+    # model then tries to call — the audit_e52491f1 failure).
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
+    monkeypatch.setenv("CLAUDE_CODE_SSE_PORT", "12345")
+    env = ClaudeCodeChatProvider(oauth_token="oat-abc")._build_env()
+    assert "CLAUDECODE" not in env
+    assert "CLAUDE_CODE_ENTRYPOINT" not in env
+    assert "CLAUDE_CODE_SSE_PORT" not in env
+    # Our own token var survives the prefix strip (set after filtering).
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "oat-abc"
 
 
 # --------------------------------------------------------------------- chat

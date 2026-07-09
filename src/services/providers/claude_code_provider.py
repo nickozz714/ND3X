@@ -43,9 +43,21 @@ NON_AGENTIC_DISALLOWED_TOOLS = (
     "Bash,Edit,Write,NotebookEdit,Read,Glob,Grep,WebFetch,WebSearch,Task,TodoWrite"
 )
 
-# Env vars stripped from the subprocess: if ANTHROPIC_API_KEY (or AUTH_TOKEN)
-# leaks in, the CLI bills the API instead of the subscription token.
-_STRIPPED_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+# Env vars stripped from the subprocess:
+# - ANTHROPIC_API_KEY / AUTH_TOKEN: if either leaks in, the CLI bills the API
+#   instead of the subscription token.
+# - CLAUDECODE / CLAUDE_CODE_*: when ND3X itself was launched from inside a
+#   Claude Code session (dev!), the nested CLI inherits that session's harness
+#   and its extra tools — the model then calls tools we never gave it.
+_STRIPPED_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDECODE")
+_STRIPPED_ENV_PREFIXES = ("CLAUDE_CODE_",)
+
+# Plain-chat mode still leaves room for the model to recover from a stray
+# (denied) tool attempt with a text answer; 1 would hard-fail on the attempt.
+NON_AGENTIC_MAX_TURNS = 4
+NON_AGENTIC_INSTRUCTION = (
+    "Answer directly in plain text. Never use tools; every tool is disabled."
+)
 
 
 def _default_timeout() -> float:
@@ -129,24 +141,32 @@ class ClaudeCodeChatProvider(ChatProvider):
     # ------------------------------------------------------------------ build
 
     def _build_env(self) -> Dict[str, str]:
-        env = {k: v for k, v in os.environ.items() if k not in _STRIPPED_ENV_VARS}
+        env = {
+            k: v for k, v in os.environ.items()
+            if k not in _STRIPPED_ENV_VARS and not k.startswith(_STRIPPED_ENV_PREFIXES)
+        }
         if self._oauth_token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = self._oauth_token
         return env
 
     def _build_cmd(self, model_id: str, instructions: Optional[str]) -> List[str]:
         cmd = [self._cli_path, "-p", "--model", model_id]
-        if instructions:
-            cmd += ["--append-system-prompt", instructions]
         if self._agentic:
+            if instructions:
+                cmd += ["--append-system-prompt", instructions]
             cmd += ["--permission-mode", "bypassPermissions"]
             if self._allowed_tools:
                 cmd += ["--allowedTools", self._allowed_tools]
             if self._max_turns:
                 cmd += ["--max-turns", str(int(self._max_turns))]
         else:
-            cmd += ["--max-turns", str(int(self._max_turns or 1))]
+            system = f"{instructions}\n\n{NON_AGENTIC_INSTRUCTION}" if instructions else NON_AGENTIC_INSTRUCTION
+            cmd += ["--append-system-prompt", system]
+            cmd += ["--max-turns", str(int(self._max_turns or NON_AGENTIC_MAX_TURNS))]
             cmd += ["--disallowedTools", NON_AGENTIC_DISALLOWED_TOOLS]
+            # Don't load user/project MCP servers in plain-chat mode — their
+            # tools would only be extra bait for a wasted tool attempt.
+            cmd += ["--strict-mcp-config"]
         cmd += self._extra_args
         return cmd
 
@@ -223,10 +243,18 @@ class ClaudeCodeChatProvider(ChatProvider):
             )
 
         if proc.returncode != 0:
+            # The CLI also exits non-zero for in-band errors (auth, usage limit,
+            # max turns) whose real message is the JSON envelope on STDOUT —
+            # surface that; stderr is often empty.
             err = (stderr or b"").decode("utf-8", errors="replace").strip()
+            try:
+                data = self._parse_result(stdout)
+                detail = f"{data.get('subtype')}: {str(data.get('result') or '')[:400]}"
+            except Exception:  # noqa: BLE001
+                out = (stdout or b"").decode("utf-8", errors="replace").strip()
+                detail = err[-400:] or out[-400:] or "geen stderr/stdout"
             raise RuntimeError(
-                f"Claude Code CLI faalde (exit {proc.returncode}) voor '{model_id}': "
-                f"{err[-800:] or 'geen stderr'}"
+                f"Claude Code CLI faalde (exit {proc.returncode}) voor '{model_id}': {detail}"
             )
 
         data = self._parse_result(stdout)
