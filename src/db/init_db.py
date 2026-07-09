@@ -39,6 +39,7 @@ async def init_db() -> None:
     from models import meeting_profile as _meeting_profile_models  # noqa: F401
     from models import slash_command as _slash_command_models  # noqa: F401
     from models import secret as _secret_models  # noqa: F401
+    from models import board as _board_models  # noqa: F401
 
     Base.metadata.create_all(bind=get_engine())
     db = get_session_factory()()

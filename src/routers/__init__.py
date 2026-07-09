@@ -31,6 +31,7 @@ from .slash_command_router import router as slash_command_routes
 from .image_routes import router as image_routes
 from .import_export_router import router as import_export_routes
 from .secrets import router as secrets_routes
+from .board_router import router as board_routes
 
 all_routers = [
     authenticate_router,
@@ -66,4 +67,5 @@ all_routers = [
     image_routes,
     import_export_routes,
     secrets_routes,
+    board_routes,
 ]
