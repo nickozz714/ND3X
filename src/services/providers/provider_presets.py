@@ -28,9 +28,12 @@ PRESETS = [
         # and trigger local-model treatment (light prompts) it doesn't need.
         "key": "claude_code", "provider_type": "claude_code", "label": "Claude Code (CLI)",
         "description": "Runs the local Claude Code CLI on your Claude subscription — no per-token "
-                       "cost. Paste the token from `claude setup-token` as the API key.",
+                       "cost. Paste the token from `claude setup-token` as the API key, or leave "
+                       "it empty to use this machine's `claude` login.",
         "base_url": "", "api_key_url": "",
-        "needs_base_url": False, "is_local": False, "capabilities": ["chat"],
+        # Token is optional: without it the CLI uses the host's own login.
+        "needs_base_url": False, "needs_api_key": False, "is_local": False,
+        "capabilities": ["chat"],
     },
     {
         "key": "gemini", "provider_type": "gemini", "label": "Google Gemini",
