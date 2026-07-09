@@ -24,6 +24,12 @@ def provider_supports_web_search(provider_type: Optional[str], model_id: Optiona
     if p in ("gemini", "google", "google_genai"):
         # Gemini `google_search` grounding — 1.5 / 2.x.
         return any(k in m for k in ("gemini-1.5", "gemini-2", "gemini-exp"))
+    if p == "claude_code":
+        # Claude Code CLI ships its own WebSearch tool (subscription, all
+        # models). Whether it's actually used is the provider's native_web
+        # config choice, enforced in web_search_service; the per-model
+        # "web: on/off" toggle here still wins as override.
+        return True
     return False  # openai-compatible / local / unknown → no native web search
 
 

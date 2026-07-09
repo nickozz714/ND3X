@@ -112,6 +112,11 @@ def _build_chat_provider(p: Provider, api_key: Optional[str], default_model: str
             workdir=cfg.get("workdir"),
             allowed_tools=cfg.get("allowed_tools"),
             extra_args=cfg.get("extra_args"),
+            # Explicit native-vs-orchestrator capability choices (see the
+            # provider module docstring). Web defaults on, files/bash off.
+            native_web=bool(cfg.get("native_web", True)),
+            native_files=bool(cfg.get("native_files", False)),
+            native_bash=bool(cfg.get("native_bash", False)),
         )
     log.warningx("Onbekend chat provider type", provider_type=t)
     return None

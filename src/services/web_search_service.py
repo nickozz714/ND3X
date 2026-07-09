@@ -43,11 +43,13 @@ def search(db: Session, query: str, *, max_results: int = 5) -> Dict[str, Any]:
             "Use a web-search-capable model (OpenAI/Anthropic/Gemini) — set it to 'web: on' in AI Models if needed — "
             "or add your own search MCP server.")}
 
+    ptype = (resolved.provider_type or "").lower()
     key = reg.get_api_key(resolved.provider_id)
-    if not key:
+    # claude_code needs no API key — it searches via the local CLI on the
+    # subscription (host login or stored setup-token).
+    if not key and ptype != "claude_code":
         return {"ok": False, "error": f"No API key configured for the web-search provider ({resolved.provider_type})."}
 
-    ptype = (resolved.provider_type or "").lower()
     model = resolved.model_id
     try:
         if ptype in ("openai", "openai_compatible", "openai-compatible", "azure_openai"):
@@ -56,6 +58,8 @@ def search(db: Session, query: str, *, max_results: int = 5) -> Dict[str, Any]:
             return _anthropic(key, model, query, max_results)
         if ptype in ("gemini", "google", "google_genai"):
             return _gemini(key, model, query)
+        if ptype == "claude_code":
+            return _claude_code(db, resolved.provider_id, key, model, query, max_results)
     except Exception as exc:  # noqa: BLE001 — surface a clean error to the agent
         log.warningx("web search mislukt", provider=ptype, error=str(exc))
         return {"ok": False, "error": f"web search failed: {exc}"}
@@ -92,3 +96,48 @@ def _gemini(key: str, model: str, query: str) -> Dict[str, Any]:
         config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())]),
     )
     return {"ok": True, "provider": "gemini", "answer": getattr(resp, "text", "") or ""}
+
+
+def _claude_code(db: Session, provider_id: int, key: str | None, model: str,
+                 query: str, max_results: int) -> Dict[str, Any]:
+    """Search via the Claude Code CLI's own WebSearch tool (subscription).
+
+    Honors the provider's explicit native_web choice: when the config says the
+    orchestrator owns web search (native_web=false), this returns a clear
+    error instead of silently searching anyway.
+    """
+    import asyncio
+    import json as _json
+
+    from models.provider import Provider
+    from services.providers.claude_code_provider import ClaudeCodeChatProvider
+
+    p = db.query(Provider).filter(Provider.id == provider_id).first()
+    cfg: Dict[str, Any] = {}
+    try:
+        cfg = _json.loads((p.config_json if p else None) or "{}") or {}
+    except Exception:  # noqa: BLE001
+        pass
+    if not bool(cfg.get("native_web", True)):
+        return {"ok": False, "error": (
+            "Web search via Claude Code is disabled for this provider "
+            "(native_web=false in its config). Enable it there, or assign a "
+            "web-search-capable model from another provider.")}
+
+    prov = ClaudeCodeChatProvider(
+        default_model=model,
+        oauth_token=key,
+        cli_path=str(cfg.get("cli_path") or "claude"),
+        agentic=False,
+        native_web=True,
+        max_turns=8,  # a search needs a few tool turns before the answer
+        timeout=cfg.get("timeout"),
+    )
+    result = asyncio.run(prov.chat(
+        query,
+        instructions=(
+            "Search the web to answer the user's query (use WebSearch, at most "
+            f"{max_results} searches; WebFetch a result only when needed). Reply "
+            "with a concise factual answer and cite the source URLs you used."),
+    ))
+    return {"ok": True, "provider": "claude_code", "answer": result.text}

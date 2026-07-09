@@ -126,20 +126,44 @@ def test_to_prompt_passthrough_and_transcript():
     assert "base64" not in prompt  # images are skipped
 
 
-def test_build_cmd_plain_chat_mode():
+def test_build_cmd_plain_chat_mode_defaults():
+    # Default native choices: web ON (CLI WebSearch/WebFetch), files/bash OFF.
     p = ClaudeCodeChatProvider(default_model="sonnet")
     cmd = p._build_cmd("sonnet", "instructies")
     assert cmd[:2] == ["claude", "-p"]
     assert ["--model", "sonnet"] == cmd[2:4]
     system = cmd[cmd.index("--append-system-prompt") + 1]
-    # The no-tools instruction rides along so the model doesn't burn turns
-    # on (denied) tool attempts.
-    assert system.startswith("instructies") and NON_AGENTIC_INSTRUCTION in system
+    assert system.startswith("instructies") and "Only use these tools" in system
     assert ["--max-turns", str(NON_AGENTIC_MAX_TURNS)] == \
         cmd[cmd.index("--max-turns"):cmd.index("--max-turns") + 2]
-    assert NON_AGENTIC_DISALLOWED_TOOLS in cmd
+    allowed = cmd[cmd.index("--allowedTools") + 1]
+    assert "WebSearch" in allowed and "WebFetch" in allowed
+    disallowed = cmd[cmd.index("--disallowedTools") + 1]
+    assert "Bash" in disallowed and "Read" in disallowed
+    assert "WebSearch" not in disallowed
     assert "--strict-mcp-config" in cmd
     assert "--permission-mode" not in cmd
+
+
+def test_build_cmd_plain_chat_all_native_off():
+    # Orchestrator owns everything: no allowlist, full disallow, hard no-tools
+    # instruction.
+    p = ClaudeCodeChatProvider(default_model="sonnet", native_web=False)
+    cmd = p._build_cmd("sonnet", "instructies")
+    assert "--allowedTools" not in cmd
+    assert NON_AGENTIC_DISALLOWED_TOOLS in cmd
+    assert NON_AGENTIC_INSTRUCTION in cmd[cmd.index("--append-system-prompt") + 1]
+
+
+def test_build_cmd_plain_chat_native_groups():
+    p = ClaudeCodeChatProvider(default_model="sonnet", native_web=False,
+                               native_files=True, native_bash=False)
+    cmd = p._build_cmd("sonnet", None)
+    allowed = cmd[cmd.index("--allowedTools") + 1]
+    assert "Read" in allowed and "Glob" in allowed and "Grep" in allowed
+    assert "WebSearch" not in allowed and "Bash" not in allowed
+    disallowed = cmd[cmd.index("--disallowedTools") + 1]
+    assert "Read" not in disallowed and "Bash" in disallowed and "WebSearch" in disallowed
 
 
 def test_build_cmd_agentic_mode():
@@ -347,3 +371,60 @@ def test_health_check_reports_cli_presence(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda _: None)
     missing = asyncio.run(check_provider(provider_type="claude_code", base_url=None, has_api_key=True))
     assert missing["status"] == "unconfigured"
+
+
+def test_factory_parses_native_choices():
+    import models.provider as pv
+    from services.providers.provider_factory import _build_chat_provider
+
+    p = pv.Provider(
+        name="CCN", provider_type="claude_code",
+        config_json=json.dumps({"native_web": False, "native_files": True}),
+    )
+    provider = _build_chat_provider(p, None, "sonnet", None)
+    assert provider._native == {"web": False, "files": True, "bash": False}
+    # Defaults when config_json is empty: web on, files/bash off.
+    p2 = pv.Provider(name="CCN2", provider_type="claude_code")
+    assert _build_chat_provider(p2, None, "sonnet", None)._native == \
+        {"web": True, "files": False, "bash": False}
+
+
+def test_web_search_capability_claude_code_default_on():
+    from services.providers.web_search_capability import effective_web_search
+
+    assert effective_web_search("claude_code", "opus", None) is True
+    # Per-model UI override ("web: off") still wins.
+    assert effective_web_search("claude_code", "opus", False) is False
+
+
+def test_web_search_service_honors_native_web_choice(monkeypatch):
+    import models.provider as pv
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from services.web_search_service import _claude_code as ws_claude_code
+    from services.providers.base import ChatResult
+
+    engine = create_engine("sqlite:///:memory:")
+    pv.Provider.__table__.create(bind=engine)
+    db = sessionmaker(bind=engine)()
+
+    # native_web=false -> explicit choice: orchestrator owns web search.
+    p_off = pv.Provider(name="CC-off", provider_type="claude_code",
+                        config_json=json.dumps({"native_web": False}))
+    db.add(p_off); db.commit()
+    out = ws_claude_code(db, p_off.id, None, "opus", "weer Urmond", 5)
+    assert out["ok"] is False and "native_web" in out["error"]
+
+    # native_web on (default) -> searches via the CLI provider.
+    p_on = pv.Provider(name="CC-on", provider_type="claude_code")
+    db.add(p_on); db.commit()
+
+    async def fake_chat(self, user_input, **kwargs):
+        assert "WebSearch" in (kwargs.get("instructions") or "")
+        return ChatResult(text="Morgen 22°C in Urmond (bron: knmi.nl)",
+                          provider="claude_code", model="opus")
+
+    monkeypatch.setattr(ccp.ClaudeCodeChatProvider, "chat", fake_chat)
+    out = ws_claude_code(db, p_on.id, None, "opus", "weer Urmond", 5)
+    assert out["ok"] is True and "Urmond" in out["answer"]
+    db.close()

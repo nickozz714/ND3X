@@ -22,9 +22,19 @@ Two modes (per-provider `config_json`):
   --permission-mode bypassPermissions. NOTE: that executes shell commands in
   THIS process's environment/container — only enable it on isolated deploys.
 
+Native-capability choices (plain-chat mode): what runs inside the CLI vs what
+stays with the ND3X orchestrator is an EXPLICIT per-provider choice, not an
+accident of flags. `native_web` (default true) allows WebSearch/WebFetch and
+also feeds the ND3X `web_search` tool (web_search_service routes to the CLI
+when the chat slot holds this provider); `native_files` (Read/Glob/Grep) and
+`native_bash` (Bash/Edit/Write) default false — they execute in the ND3X
+process environment, so the orchestrator's own tools stay authoritative
+unless deliberately enabled.
+
 config_json keys (all optional):
   {"agentic": bool, "cli_path": "claude", "timeout": 600, "max_turns": int,
-   "workdir": "/path", "allowed_tools": "Bash(git:*) Read", "extra_args": [...]}
+   "workdir": "/path", "allowed_tools": "Bash(git:*) Read", "extra_args": [...],
+   "native_web": true, "native_files": false, "native_bash": false}
 """
 from __future__ import annotations
 
@@ -58,6 +68,16 @@ NON_AGENTIC_MAX_TURNS = 4
 NON_AGENTIC_INSTRUCTION = (
     "Answer directly in plain text. Never use tools; every tool is disabled."
 )
+
+# Named native-capability groups: the EXPLICIT choice of what runs inside the
+# Claude Code CLI vs what stays with the ND3X orchestrator. Configured per
+# provider (config_json: native_web / native_files / native_bash) and honored
+# both here (chat runs) and in web_search_service (the ND3X web_search tool).
+NATIVE_TOOL_GROUPS: Dict[str, str] = {
+    "web": "WebSearch,WebFetch",
+    "files": "Read,Glob,Grep",
+    "bash": "Bash,Edit,Write,NotebookEdit",
+}
 
 
 def _default_timeout() -> float:
@@ -122,6 +142,14 @@ class ClaudeCodeChatProvider(ChatProvider):
         workdir: Optional[str] = None,
         allowed_tools: Optional[str] = None,
         extra_args: Optional[List[str]] = None,
+        # Explicit native-capability choices (plain-chat mode). Web defaults ON
+        # (safe, no per-token cost, and what makes the provider useful without
+        # an orchestrator search model); files/bash default OFF — those run in
+        # the ND3X process environment and stay with the orchestrator unless
+        # deliberately enabled.
+        native_web: bool = True,
+        native_files: bool = False,
+        native_bash: bool = False,
     ):
         self._default_model = default_model
         self._oauth_token = (oauth_token or "").strip() or None
@@ -132,11 +160,19 @@ class ClaudeCodeChatProvider(ChatProvider):
         self._workdir = workdir or None
         self._allowed_tools = allowed_tools or None
         self._extra_args = list(extra_args or [])
+        self._native = {"web": bool(native_web), "files": bool(native_files), "bash": bool(native_bash)}
         log.debugx(
             "ClaudeCodeChatProvider aangemaakt",
             cli_path=self._cli_path, agentic=self._agentic,
             has_token=bool(self._oauth_token), timeout=self._timeout,
+            native=self._native,
         )
+
+    @property
+    def native_web(self) -> bool:
+        """Whether CLI-native web search (WebSearch/WebFetch) is enabled — also
+        consulted by web_search_service for the ND3X web_search tool."""
+        return self._native["web"]
 
     # ------------------------------------------------------------------ build
 
@@ -160,10 +196,29 @@ class ClaudeCodeChatProvider(ChatProvider):
             if self._max_turns:
                 cmd += ["--max-turns", str(int(self._max_turns))]
         else:
-            system = f"{instructions}\n\n{NON_AGENTIC_INSTRUCTION}" if instructions else NON_AGENTIC_INSTRUCTION
+            # Plain-chat: the allowlist is the union of the enabled native
+            # groups (config choices) + an optional expert `allowed_tools`
+            # string. Everything else stays disallowed — the orchestrator owns
+            # those capabilities.
+            allowed = [
+                t for group, names in NATIVE_TOOL_GROUPS.items() if self._native.get(group)
+                for t in names.split(",")
+            ]
+            allowed += [t.strip() for t in (self._allowed_tools or "").replace(",", " ").split() if t.strip()]
+            allowed_names = {t.split("(", 1)[0] for t in allowed}
+            disallowed = [t for t in NON_AGENTIC_DISALLOWED_TOOLS.split(",") if t not in allowed_names]
+            if allowed:
+                extra = ("Only use these tools, and only when needed: "
+                         f"{', '.join(sorted(allowed_names))}. Answer in plain text.")
+            else:
+                extra = NON_AGENTIC_INSTRUCTION
+            system = f"{instructions}\n\n{extra}" if instructions else extra
             cmd += ["--append-system-prompt", system]
             cmd += ["--max-turns", str(int(self._max_turns or NON_AGENTIC_MAX_TURNS))]
-            cmd += ["--disallowedTools", NON_AGENTIC_DISALLOWED_TOOLS]
+            if disallowed:
+                cmd += ["--disallowedTools", ",".join(disallowed)]
+            if allowed:
+                cmd += ["--allowedTools", ",".join(dict.fromkeys(allowed))]
             # Don't load user/project MCP servers in plain-chat mode — their
             # tools would only be extra bait for a wasted tool attempt.
             cmd += ["--strict-mcp-config"]
