@@ -23,6 +23,14 @@ PRESETS = [
         "needs_base_url": False, "is_local": False, "capabilities": ["chat"],
     },
     {
+        "key": "claude_code", "provider_type": "claude_code", "label": "Claude Code (CLI)",
+        "description": "Runs the local Claude Code CLI on your Claude subscription — no per-token "
+                       "cost. Paste the token from `claude setup-token` as the API key "
+                       "(leave empty to use the machine's `claude` login).",
+        "base_url": "", "api_key_url": "",
+        "needs_base_url": False, "is_local": True, "capabilities": ["chat"],
+    },
+    {
         "key": "gemini", "provider_type": "gemini", "label": "Google Gemini",
         "description": "Gemini 1.5/2.0 — huge context windows, multimodal, cheap Flash tier.",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",

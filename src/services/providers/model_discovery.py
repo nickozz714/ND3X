@@ -68,6 +68,9 @@ def discover_models(
     *, provider_type: str, base_url: Optional[str], api_key: Optional[str],
 ) -> Dict[str, Any]:
     t = (provider_type or "").strip()
+    if t == "claude_code":
+        # No listing API — the CLI takes model aliases; latest per tier.
+        return {"models": _shape(["opus", "sonnet", "haiku"], t)}
     try:
         import httpx
         if t == "anthropic":

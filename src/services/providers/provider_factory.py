@@ -89,6 +89,30 @@ def _build_chat_provider(p: Provider, api_key: Optional[str], default_model: str
             log.warningx("Gemini provider zonder API key", provider_id=p.id)
             return None
         return GeminiChatProvider(api_key=api_key, default_model=default_model, provider_id=p.id)
+    if t == "claude_code":
+        # Headless Claude Code CLI on the local machine. The stored "API key" is
+        # the `claude setup-token` OAuth token (subscription auth); without it
+        # the CLI falls back to the host login (~/.claude). Extra knobs come
+        # from config_json — see claude_code_provider.py for the key list.
+        import json as _json
+        from services.providers.claude_code_provider import ClaudeCodeChatProvider
+        cfg: Dict[str, Any] = {}
+        try:
+            cfg = _json.loads(p.config_json or "{}") or {}
+        except Exception:  # noqa: BLE001
+            log.warningx("Claude Code provider config_json niet parsebaar — defaults gebruikt",
+                         provider_id=p.id)
+        return ClaudeCodeChatProvider(
+            default_model=default_model,
+            oauth_token=api_key,
+            cli_path=str(cfg.get("cli_path") or "claude"),
+            agentic=bool(cfg.get("agentic")),
+            max_turns=cfg.get("max_turns"),
+            timeout=cfg.get("timeout"),
+            workdir=cfg.get("workdir"),
+            allowed_tools=cfg.get("allowed_tools"),
+            extra_args=cfg.get("extra_args"),
+        )
     log.warningx("Onbekend chat provider type", provider_type=t)
     return None
 

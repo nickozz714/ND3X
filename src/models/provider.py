@@ -39,6 +39,9 @@ PROVIDER_TYPES = (
     "ollama",
     "gemini",
     "voyage",
+    # Headless Claude Code CLI on the local machine; auth = `claude setup-token`
+    # OAuth token (subscription), stored in api_key_encrypted like other keys.
+    "claude_code",
 )
 
 # Capability identifiers a ProviderModel can serve.

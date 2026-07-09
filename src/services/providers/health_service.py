@@ -50,6 +50,16 @@ async def check_provider(
         return {"status": "ok" if has_api_key else "unconfigured",
                 "detail": "API key present" if has_api_key else "no API key"}
 
+    if t == "claude_code":
+        # Local CLI — healthy when the binary is on PATH; auth (setup-token or
+        # host login) only surfaces at call time. A custom cli_path lives in
+        # config_json, which this probe doesn't see; PATH covers the default.
+        import shutil
+        found = shutil.which("claude")
+        if found:
+            return {"status": "ok", "detail": f"claude CLI at {found}"}
+        return {"status": "unconfigured", "detail": "claude CLI not found on PATH"}
+
     return {"status": "unknown", "detail": f"unhandled provider type {t!r}"}
 
 
