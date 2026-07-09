@@ -3422,7 +3422,10 @@ class WorkflowExecutor:
                 question=question,
                 operation_config=config,
                 run_transcript=self._workflow_run_transcript(context),
-                model=config.get("model"),
+                # The engine's own model field wins over any leftover orchestrator
+                # pin (config.model) — that pin may be a GPT/local model the CLI
+                # can't run. None → the claude_code provider default.
+                model=(_exec_cfg.get("model") or None),
                 workflow_run_id=context["workflow_run_id"],
                 operation_id=operation.id,
             )

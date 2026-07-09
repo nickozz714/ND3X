@@ -125,6 +125,23 @@ def test_run_partial_status_flows_through(monkeypatch, db):
     assert out["downstream_handoff"]["status"] == "partial"
 
 
+def test_build_provider_uses_execution_model(db):
+    # The engine's own execution.model determines the Claude model — not any
+    # leftover orchestrator model pin.
+    _add_provider(db, config={"cli_path": "claude"})
+    runner = ClaudeCodeOperationRunner(db)
+    prov = runner._build_provider(
+        {"execution": {"engine": "claude_code", "model": "sonnet", "allowed_tools": "Bash"}},
+        model=None,
+    )
+    assert prov._default_model == "sonnet"
+    assert prov._agentic is True
+    assert prov._allowed_tools == "Bash"
+    # No execution.model → provider default_model / alias fallback.
+    prov2 = runner._build_provider({"execution": {"engine": "claude_code"}}, model=None)
+    assert prov2._default_model == "opus"
+
+
 def test_run_without_provider_raises(db):
     runner = ClaudeCodeOperationRunner(db)
     with pytest.raises(RuntimeError, match="no enabled Claude Code provider"):
