@@ -22,6 +22,7 @@ Engine selection lives in the operation's `config.execution`:
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -76,7 +77,8 @@ class ClaudeCodeOperationRunner:
                 .order_by(Provider.id.asc())
                 .first())
 
-    def _build_provider(self, operation_config: Dict[str, Any], model: Optional[str]):
+    def _build_provider(self, operation_config: Dict[str, Any], model: Optional[str],
+                        *, mcp_config_path: Optional[str] = None):
         p = self._resolve_provider()
         if p is None:
             raise RuntimeError(
@@ -94,6 +96,14 @@ class ClaudeCodeOperationRunner:
         # Model: per-step override wins, else the provider default, else a alias.
         model_id = model or exec_cfg.get("model") or cfg.get("default_model") or "opus"
 
+        # Give the autonomous run ND3X's own tools + MCP servers (Fabric, board,
+        # …) via the gateway, unless the step opts out. Web tools stay the CLI's
+        # own (the gateway excludes them). This is the global default the user
+        # chose; set execution.nd3x_tools=false to run fully isolated.
+        extra_args = list(exec_cfg.get("extra_args") or [])
+        if mcp_config_path:
+            extra_args += ["--mcp-config", mcp_config_path]
+
         from services.providers.claude_code_provider import ClaudeCodeChatProvider
         return ClaudeCodeChatProvider(
             default_model=model_id,
@@ -104,7 +114,29 @@ class ClaudeCodeOperationRunner:
             max_turns=exec_cfg.get("max_turns") or cfg.get("max_turns") or 30,
             timeout=exec_cfg.get("timeout") or cfg.get("timeout"),
             workdir=exec_cfg.get("workdir") or cfg.get("workdir"),
+            extra_args=extra_args,
         )
+
+    @staticmethod
+    def _want_nd3x_tools(operation_config: Dict[str, Any]) -> bool:
+        exec_cfg = operation_config.get("execution") if isinstance(operation_config.get("execution"), dict) else {}
+        return bool(exec_cfg.get("nd3x_tools", True))
+
+    @staticmethod
+    def _write_gateway_config() -> Optional[str]:
+        """Write the ND3X MCP gateway --mcp-config to a temp file for the CLI."""
+        try:
+            import tempfile
+            from services.mcp.mcp_gateway import mcp_config_for_cli
+            cfg = mcp_config_for_cli()
+            fd, path = tempfile.mkstemp(prefix="nd3x-mcp-", suffix=".json")
+            with os.fdopen(fd, "w") as f:
+                json.dump(cfg, f)
+            return path
+        except Exception as exc:  # noqa: BLE001 — the run can still proceed without ND3X tools
+            log.warningx("ND3X MCP gateway config schrijven mislukt — stap draait zonder ND3X-tools",
+                         error=str(exc))
+            return None
 
     async def run(
         self,
@@ -116,20 +148,35 @@ class ClaudeCodeOperationRunner:
         workflow_run_id: Optional[int] = None,
         operation_id: Optional[int] = None,
     ) -> Dict[str, Any]:
-        provider = self._build_provider(operation_config or {}, model)
+        # Expose ND3X's tools + MCP servers to the autonomous run via the stdio
+        # gateway (unless the step opted out). Written to a temp --mcp-config the
+        # CLI loads; removed after the run.
+        mcp_config_path: Optional[str] = None
+        if self._want_nd3x_tools(operation_config or {}):
+            mcp_config_path = self._write_gateway_config()
+
+        provider = self._build_provider(operation_config or {}, model, mcp_config_path=mcp_config_path)
         prompt = self._build_prompt(question, run_transcript)
         trace: List[Dict[str, Any]] = [{
             "type": "claude_code_operation_start",
             "level": "info",
             "operation_id": operation_id,
             "workflow_run_id": workflow_run_id,
+            "nd3x_tools": mcp_config_path is not None,
         }]
         log.infox(
             "Claude Code workflow operation run gestart",
             workflow_run_id=workflow_run_id, operation_id=operation_id,
-            question_length=len(question or ""),
+            question_length=len(question or ""), nd3x_tools=mcp_config_path is not None,
         )
-        result = await provider.chat(prompt, instructions=_HANDOFF_INSTRUCTION)
+        try:
+            result = await provider.chat(prompt, instructions=_HANDOFF_INSTRUCTION)
+        finally:
+            if mcp_config_path:
+                try:
+                    os.unlink(mcp_config_path)
+                except Exception:  # noqa: BLE001
+                    pass
         answer, handoff = self._parse_envelope(result.text)
         trace.append({
             "type": "claude_code_operation_end",

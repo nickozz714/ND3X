@@ -48,6 +48,7 @@ def _stub_chat(monkeypatch, text: str, capture: dict | None = None):
             capture["agentic"] = self._agentic
             capture["allowed_tools"] = self._allowed_tools
             capture["max_turns"] = self._max_turns
+            capture["extra_args"] = list(self._extra_args)
         return ChatResult(text=text, response_id="sess-9", provider="claude_code",
                           model="opus", usage={"output_tokens": 5})
 
@@ -123,6 +124,35 @@ def test_run_partial_status_flows_through(monkeypatch, db):
     _stub_chat(monkeypatch, json.dumps(env))
     out = asyncio.run(ClaudeCodeOperationRunner(db).run(question="q", operation_config={}))
     assert out["downstream_handoff"]["status"] == "partial"
+
+
+def test_run_wires_nd3x_gateway_by_default(monkeypatch, db):
+    # The autonomous run gets ND3X's tools via a --mcp-config unless opted out.
+    _add_provider(db)
+    capture: dict = {}
+    _stub_chat(monkeypatch, json.dumps({"answer": "ok", "downstream_handoff": {"summary": "s", "status": "success"}}), capture)
+
+    # Stub the gateway config write (no real temp file) — the run should thread
+    # the returned path into the CLI as --mcp-config, then clean it up.
+    monkeypatch.setattr(ClaudeCodeOperationRunner, "_write_gateway_config",
+                        staticmethod(lambda: "/tmp/fake-mcp.json"))
+    import services.workflows.claude_code_operation_runner as ccr
+    monkeypatch.setattr(ccr.os, "unlink", lambda p: None)
+
+    asyncio.run(ClaudeCodeOperationRunner(db).run(question="q", operation_config={}))
+    assert "--mcp-config" in (capture.get("extra_args") or [])
+    assert "/tmp/fake-mcp.json" in (capture.get("extra_args") or [])
+
+
+def test_run_can_opt_out_of_nd3x_tools(monkeypatch, db):
+    _add_provider(db)
+    capture: dict = {}
+    _stub_chat(monkeypatch, json.dumps({"answer": "ok", "downstream_handoff": {"summary": "s", "status": "success"}}), capture)
+    monkeypatch.setattr(ClaudeCodeOperationRunner, "_write_gateway_config",
+                        staticmethod(lambda: (_ for _ in ()).throw(AssertionError("should not be called"))))
+    asyncio.run(ClaudeCodeOperationRunner(db).run(
+        question="q", operation_config={"execution": {"nd3x_tools": False}}))
+    assert "--mcp-config" not in (capture.get("extra_args") or [])
 
 
 def test_build_provider_uses_execution_model(db):
