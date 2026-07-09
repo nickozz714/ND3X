@@ -51,6 +51,7 @@ class WorkflowExecutor:
         run_repository: WorkflowRunRepository,
         assistant_runner: AssistantOperationRunner,
         prompt_variable_resolver=None,
+        claude_code_runner=None,
     ):
         log.infox(
             "WorkflowExecutor initialiseren",
@@ -66,6 +67,9 @@ class WorkflowExecutor:
         self.run_repository = run_repository
         self.assistant_runner = assistant_runner
         self.prompt_variable_resolver = prompt_variable_resolver
+        # Optional alternative engine: run an assistant activity as an autonomous
+        # Claude Code CLI task (config.execution.engine == "claude_code").
+        self.claude_code_runner = claude_code_runner
         log.infox("WorkflowExecutor geïnitialiseerd")
 
 
@@ -3328,15 +3332,41 @@ class WorkflowExecutor:
             if isinstance(resolved_thread, str) and resolved_thread.strip():
                 shared_session_id = resolved_thread.strip()
 
-        result = await self.assistant_runner.run(
-            assistant_id=operation.operation_ref_id,
-            question=question,
-            payload=run_payload,
-            workflow_run_id=context["workflow_run_id"],
-            operation_id=operation.id,
-            model=config.get("model"),
-            session_id=shared_session_id,
-        )
+        # Per-operation execution engine. Default "orchestrator" = the ND3X agent
+        # loop with ND3X tools (below). "claude_code" runs the step as one
+        # autonomous Claude Code CLI task, fully outside the orchestrator; it
+        # returns a pipeline-shaped result so all handling below is unchanged.
+        _exec_cfg = config.get("execution") if isinstance(config.get("execution"), dict) else {}
+        _engine = str(_exec_cfg.get("engine") or "orchestrator").strip().lower()
+        if _engine == "claude_code" and self.claude_code_runner is not None:
+            log.infox(
+                "Assistant workflow operation draait op de claude_code engine",
+                workflow_run_id=context.get("workflow_run_id"),
+                operation_id=getattr(operation, "id", None),
+            )
+            result = await self.claude_code_runner.run(
+                question=question,
+                operation_config=config,
+                run_transcript=self._workflow_run_transcript(context),
+                model=config.get("model"),
+                workflow_run_id=context["workflow_run_id"],
+                operation_id=operation.id,
+            )
+        elif _engine == "claude_code":
+            raise RuntimeError(
+                "Operation is set to the 'claude_code' engine, but no Claude Code "
+                "provider is available. Add and enable it under AI Models, or "
+                "switch this step back to the orchestrator engine.")
+        else:
+            result = await self.assistant_runner.run(
+                assistant_id=operation.operation_ref_id,
+                question=question,
+                payload=run_payload,
+                workflow_run_id=context["workflow_run_id"],
+                operation_id=operation.id,
+                model=config.get("model"),
+                session_id=shared_session_id,
+            )
 
         log.infox(
             "Assistant workflow operation runner resultaat ontvangen",
