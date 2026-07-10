@@ -986,34 +986,48 @@ class AssistantPipelineRunner:
             try:
                 with SessionLocal() as _agent_db:
                     _agent = ClaudeCodeChatAgent(_agent_db)
-                    if progress_cb is not None:
-                        # Stream the answer live to the chat (answer_partial), as
-                        # the OpenAI planner path does, accumulating the full text.
-                        _acc: list[str] = []
-                        _last_emit = 0.0
-                        async for _delta in _agent.run_stream(
-                            user_input=plan_input, model=model,
-                            skill_names=selected_skill_names,
-                        ):
-                            _acc.append(_delta)
-                            _now = time.monotonic()
-                            if _now - _last_emit >= 0.3:
-                                _last_emit = _now
+                    # Typed stream: the agent's interim text ('thinking') and its
+                    # tool calls go to the STEPS view via the same event types the
+                    # normal loop uses (agent_narration / tool_call), so no FE
+                    # change is needed. Only the 'answer' event becomes the chat
+                    # reply.
+                    _answer = ""
+                    _narration = list(payload.get("_narration") or [])
+                    async for _ev in _agent.run_stream_events(
+                        user_input=plan_input, model=model,
+                        skill_names=selected_skill_names,
+                    ):
+                        _kind = _ev.get("kind")
+                        if _kind == "answer":
+                            _answer = _ev.get("text") or ""
+                            if progress_cb is not None:
                                 try:
                                     progress_cb({
-                                        "type": "answer_partial",
-                                        "turn_id": turn_id,
-                                        "assistant": assistant_name,
-                                        "partial_answer": "".join(_acc),
+                                        "type": "answer_partial", "turn_id": turn_id,
+                                        "assistant": assistant_name, "partial_answer": _answer,
                                     })
                                 except Exception:  # noqa: BLE001
                                     pass
-                        _answer = "".join(_acc)
-                    else:
-                        _answer = await _agent.run(
-                            user_input=plan_input, model=model,
-                            skill_names=selected_skill_names,
-                        )
+                        elif _kind == "thinking":
+                            _say = (_ev.get("text") or "").strip()
+                            if _say:
+                                self.trace_fn(
+                                    trace, thread_id=session_id, turn_id=turn_id,
+                                    type="agent_narration", summary=_say,
+                                    data={"assistant": assistant_name, "say": _say},
+                                    progress_cb=progress_cb,
+                                )
+                                _narration.append({"kind": "say", "text": _say, "ts": time.time()})
+                        elif _kind == "tool":
+                            _tool = _ev.get("name") or "tool"
+                            self.trace_fn(
+                                trace, thread_id=session_id, turn_id=turn_id,
+                                type="tool_call", summary=f"Calling {_tool}",
+                                data={"assistant": assistant_name, "tool": _tool},
+                                progress_cb=progress_cb,
+                            )
+                            _narration.append({"kind": "tool", "text": f"Using {_tool}", "ts": time.time()})
+                    payload["_narration"] = _narration
                 plan_resp = SimpleNamespace(
                     text=json.dumps({"action": "final", "final_answer": _answer})
                 )

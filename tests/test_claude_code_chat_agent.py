@@ -104,21 +104,25 @@ def test_run_includes_selected_skill_instructions(monkeypatch, db):
     assert "Should not appear" not in instr  # only selected skills
 
 
-def test_run_stream_yields_deltas(monkeypatch, db):
+def test_run_stream_events_separates_thinking_from_answer(monkeypatch, db):
     _add_cc(db)
 
-    async def fake_stream(self, user_input, **kwargs):
-        for chunk in ("Hallo ", "wereld"):
-            yield chunk
+    async def fake_events(self, user_input, **kwargs):
+        yield {"kind": "thinking", "text": "Ik zoek het even op"}
+        yield {"kind": "tool", "name": "board__list", "input": {}}
+        yield {"kind": "answer", "text": "Je hebt 4 items."}
 
     import services.providers.claude_code_provider as ccp
-    monkeypatch.setattr(ccp.ClaudeCodeChatProvider, "chat_stream", fake_stream)
+    monkeypatch.setattr(ccp.ClaudeCodeChatProvider, "chat_stream_events", fake_events)
     monkeypatch.setattr(ClaudeCodeChatAgent, "_write_gateway_config", staticmethod(lambda: None))
 
     async def collect():
-        return [d async for d in ClaudeCodeChatAgent(db).run_stream(user_input="q")]
+        return [ev async for ev in ClaudeCodeChatAgent(db).run_stream_events(user_input="q")]
 
-    assert asyncio.run(collect()) == ["Hallo ", "wereld"]
+    events = asyncio.run(collect())
+    kinds = [e["kind"] for e in events]
+    assert kinds == ["thinking", "tool", "answer"]
+    assert next(e for e in events if e["kind"] == "answer")["text"] == "Je hebt 4 items."
 
 
 def test_run_without_provider_raises(db):

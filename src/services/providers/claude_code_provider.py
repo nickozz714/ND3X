@@ -376,6 +376,89 @@ class ClaudeCodeChatProvider(ChatProvider):
 
     # ------------------------------------------------------------------ stream
 
+    async def chat_stream_events(
+        self,
+        user_input: ChatInput,
+        *,
+        model: Optional[str] = None,
+        instructions: Optional[str] = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Typed agent-run events, distinguishing PROCESS from ANSWER (for the
+        agentic chat: process → the steps view, answer → the chat reply).
+
+        Yields dicts:
+          {"kind": "thinking", "text": ...}  interim assistant text (accompanying
+                                             a tool step) — what the agent 'says'
+                                             while working.
+          {"kind": "tool", "name": ..., "input": ...}  a tool the agent called.
+          {"kind": "answer", "text": ...}    the final answer (the CLI `result`).
+        """
+        model_id = model or self._default_model
+        prompt = _to_prompt(user_input)
+        cmd = self._build_cmd(model_id, instructions) + ["--output-format", "stream-json", "--verbose"]
+
+        proc = await self._spawn(cmd)
+        answer_fallback: List[str] = []
+        usage: Dict[str, Any] = {}
+        try:
+            assert proc.stdin is not None and proc.stdout is not None
+            proc.stdin.write(prompt.encode("utf-8"))
+            await proc.stdin.drain()
+            proc.stdin.close()
+
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self._timeout
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise RuntimeError(f"Claude Code stream overschreed de timeout ({self._timeout:.0f}s)")
+                raw = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
+                if not raw:
+                    break
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line.startswith("{"):
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:  # noqa: BLE001
+                    continue
+                otype = obj.get("type")
+                if otype == "assistant":
+                    content = (obj.get("message") or {}).get("content") or []
+                    has_tool = any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content)
+                    for b in content:
+                        if not isinstance(b, dict):
+                            continue
+                        if b.get("type") == "text":
+                            text = b.get("text") or ""
+                            if not text:
+                                continue
+                            if has_tool:
+                                yield {"kind": "thinking", "text": text}
+                            else:
+                                # A text-only assistant turn — the (running) answer.
+                                answer_fallback.append(text)
+                        elif b.get("type") == "tool_use":
+                            yield {"kind": "tool", "name": b.get("name"), "input": b.get("input")}
+                elif otype == "result":
+                    if obj.get("is_error"):
+                        raise RuntimeError(
+                            f"Claude Code gaf een fout terug ({obj.get('subtype')}): "
+                            f"{str(obj.get('result') or '')[:400]}")
+                    usage = obj.get("usage") or {}
+                    answer = obj.get("result")
+                    yield {"kind": "answer", "text": (answer if isinstance(answer, str) else "".join(answer_fallback))}
+
+            rc = await proc.wait()
+            if rc != 0:
+                err = (await proc.stderr.read()).decode("utf-8", errors="replace") if proc.stderr else ""
+                raise RuntimeError(f"Claude Code CLI faalde (exit {rc}) voor '{model_id}': {err.strip()[-800:]}")
+            self._record_usage(model_id, usage)
+        finally:
+            if proc.returncode is None:
+                await self._kill(proc)
+
     async def chat_stream(
         self,
         user_input: ChatInput,

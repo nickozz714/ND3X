@@ -161,23 +161,23 @@ class ClaudeCodeChatAgent:
         log.infox("Claude Code chat-agent run afgerond", answer_chars=len(result.text or ""))
         return result.text or ""
 
-    async def run_stream(
+    async def run_stream_events(
         self,
         *,
         user_input: Any,
         model: Optional[str] = None,
         extra_instructions: Optional[str] = None,
         skill_names: Optional[List[str]] = None,
-    ) -> AsyncIterator[str]:
-        """Stream the agent's answer as text deltas (for live chat display). The
-        deltas are the assistant's text; tool calls happen between them."""
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Stream typed agent events: 'thinking'/'tool' (the agent working — for
+        the steps view) vs 'answer' (the final reply — for the chat)."""
         provider, instructions, mcp_config_path = self._prepare(model, extra_instructions, skill_names)
         prompt = self._to_prompt(user_input)
-        log.infox("Claude Code chat-agent stream gestart",
+        log.infox("Claude Code chat-agent event-stream gestart",
                   has_nd3x_tools=mcp_config_path is not None, skills=skill_names or [])
         try:
-            async for delta in provider.chat_stream(prompt, instructions=instructions, model=model):
-                yield delta
+            async for ev in provider.chat_stream_events(prompt, instructions=instructions, model=model):
+                yield ev
         finally:
             if mcp_config_path:
                 try:
