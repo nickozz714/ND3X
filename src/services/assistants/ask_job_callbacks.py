@@ -106,6 +106,7 @@ import services.builtin.tools.image_tools  # noqa: F401, E402
 import services.builtin.tools.workflow_tools  # noqa: F401, E402
 import services.builtin.tools.secret_tools  # noqa: F401, E402
 import services.builtin.tools.board_tools  # noqa: F401, E402
+import services.builtin.tools.repo_tools  # noqa: F401, E402
 
 async def boot_stdio_servers() -> None:
     """

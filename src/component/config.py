@@ -281,6 +281,9 @@ class Settings(BaseModel):
     BOOTSTRAP_SYSTEM_COGNITION_EMBEDDING_MAX_BATCHES: int = 100
 
     FILES_DIR: str = "./Files"
+    # Managed root under which registered GitHub repos are cloned
+    # (<REPOS_DIR>/<repo-name>). One managed location, easy to sandbox.
+    REPOS_DIR: str = "./repos"
 
 
 _sqlite_path = _env_or("SQLITE_PATH", _db_cfg.get("sqlite_path") or _roots.get("db_path") or "./db/nd3x.dev.db")
@@ -414,4 +417,5 @@ settings = Settings(
         100,
     ),
     FILES_DIR=_env_or("FILES_DIR", _roots.get("files_dir", "./files")),
+    REPOS_DIR=_env_or("REPOS_DIR", _roots.get("repos_dir", "./repos")),
 )

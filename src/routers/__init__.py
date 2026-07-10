@@ -32,6 +32,8 @@ from .image_routes import router as image_routes
 from .import_export_router import router as import_export_routes
 from .secrets import router as secrets_routes
 from .board_router import router as board_routes
+from .background_task_router import router as background_task_routes
+from .repository_router import router as repository_routes
 
 all_routers = [
     authenticate_router,
@@ -68,4 +70,6 @@ all_routers = [
     import_export_routes,
     secrets_routes,
     board_routes,
+    background_task_routes,
+    repository_routes,
 ]
