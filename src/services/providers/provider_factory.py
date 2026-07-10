@@ -112,11 +112,16 @@ def _build_chat_provider(p: Provider, api_key: Optional[str], default_model: str
             workdir=cfg.get("workdir"),
             allowed_tools=cfg.get("allowed_tools"),
             extra_args=cfg.get("extra_args"),
-            # Explicit native-vs-orchestrator capability choices (see the
-            # provider module docstring). Web defaults on, files/bash off.
-            native_web=bool(cfg.get("native_web", True)),
-            native_files=bool(cfg.get("native_files", False)),
-            native_bash=bool(cfg.get("native_bash", False)),
+            # This is the CHAT/planner provider: Claude Code is the planning
+            # brain and ND3X executes tools (incl. web search and Fabric via the
+            # chat.web_search / MCP slots). So it must be tool-less here — the
+            # native_* config only governs the separate web_search_service flow,
+            # which builds its own provider instance. Enabling a native tool in
+            # the planner makes Claude Code run its own tool instead of producing
+            # the ND3X plan → wasted turns / error_max_turns.
+            native_web=False,
+            native_files=False,
+            native_bash=False,
         )
     log.warningx("Onbekend chat provider type", provider_type=t)
     return None

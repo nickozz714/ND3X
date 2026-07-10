@@ -65,8 +65,23 @@ _STRIPPED_ENV_PREFIXES = ("CLAUDE_CODE_",)
 # Plain-chat mode still leaves room for the model to recover from a stray
 # (denied) tool attempt with a text answer; 1 would hard-fail on the attempt.
 NON_AGENTIC_MAX_TURNS = 4
+
+# A tool name that does not exist. As the sole --allowedTools entry it permits
+# nothing, so every real (and future) CLI tool is blocked — robustly.
+_NO_TOOLS_SENTINEL = "__nd3x_no_tools__"
+
+# The no-tools instruction. In ND3X, Claude Code in plain-chat is the PLANNING
+# BRAIN, not the executor: it must produce the planning output the ND3X prompt
+# asks for (often a JSON plan with tool_id calls) as plain text — ND3X runs any
+# tools from that output. So it must not try to invoke tools itself; its own CLI
+# tools are disabled. Spelling this out stops it from reaching for Skill /
+# ToolSearch / Cron* etc. and burning turns.
 NON_AGENTIC_INSTRUCTION = (
-    "Answer directly in plain text. Never use tools; every tool is disabled."
+    "You are the planning brain, not a tool executor. Produce exactly the "
+    "response the instructions ask for (often a JSON plan) as plain text. You "
+    "cannot call tools yourself — the ND3X system executes any tools or tool_id "
+    "calls contained in your output. Never attempt to invoke a tool directly; "
+    "your own tools are disabled. Just return the requested planning text/JSON."
 )
 
 # Named native-capability groups: the EXPLICIT choice of what runs inside the
@@ -142,12 +157,14 @@ class ClaudeCodeChatProvider(ChatProvider):
         workdir: Optional[str] = None,
         allowed_tools: Optional[str] = None,
         extra_args: Optional[List[str]] = None,
-        # Explicit native-capability choices (plain-chat mode). Web defaults ON
-        # (safe, no per-token cost, and what makes the provider useful without
-        # an orchestrator search model); files/bash default OFF — those run in
-        # the ND3X process environment and stay with the orchestrator unless
-        # deliberately enabled.
-        native_web: bool = True,
+        # Explicit native-capability choices (plain-chat mode). Default OFF —
+        # tool-less, because the default plain-chat role is the ND3X PLANNER
+        # brain (ND3X executes tools). Enabling a native tool in the planner
+        # makes Claude Code run its own tool instead of producing the plan.
+        # Only the web_search_service flow opts into native_web (it wants the
+        # CLI to actually search); the workflow autonomous engine uses agentic
+        # mode instead.
+        native_web: bool = False,
         native_files: bool = False,
         native_bash: bool = False,
     ):
@@ -196,17 +213,19 @@ class ClaudeCodeChatProvider(ChatProvider):
             if self._max_turns:
                 cmd += ["--max-turns", str(int(self._max_turns))]
         else:
-            # Plain-chat: the allowlist is the union of the enabled native
-            # groups (config choices) + an optional expert `allowed_tools`
-            # string. Everything else stays disallowed — the orchestrator owns
-            # those capabilities.
+            # Plain-chat: the allowlist is the union of the enabled native groups
+            # + an optional expert `allowed_tools`. We ALLOWLIST rather than
+            # blocklist because Claude Code keeps adding tools (Skill, ToolSearch,
+            # CronList, …); a hand-kept disallow list silently misses new ones and
+            # the model burns turns on them → error_max_turns. Whitelisting only
+            # what we permit is robust: with nothing permitted (the planner brain
+            # case), a sentinel tool name blocks EVERYTHING.
             allowed = [
                 t for group, names in NATIVE_TOOL_GROUPS.items() if self._native.get(group)
                 for t in names.split(",")
             ]
             allowed += [t.strip() for t in (self._allowed_tools or "").replace(",", " ").split() if t.strip()]
             allowed_names = {t.split("(", 1)[0] for t in allowed}
-            disallowed = [t for t in NON_AGENTIC_DISALLOWED_TOOLS.split(",") if t not in allowed_names]
             if allowed:
                 extra = ("Only use these tools, and only when needed: "
                          f"{', '.join(sorted(allowed_names))}. Answer in plain text.")
@@ -215,10 +234,9 @@ class ClaudeCodeChatProvider(ChatProvider):
             system = f"{instructions}\n\n{extra}" if instructions else extra
             cmd += ["--append-system-prompt", system]
             cmd += ["--max-turns", str(int(self._max_turns or NON_AGENTIC_MAX_TURNS))]
-            if disallowed:
-                cmd += ["--disallowedTools", ",".join(disallowed)]
-            if allowed:
-                cmd += ["--allowedTools", ",".join(dict.fromkeys(allowed))]
+            # Whitelist: the allowed set, or a non-existent tool that permits
+            # nothing (blocks every real/new CLI tool robustly).
+            cmd += ["--allowedTools", ",".join(dict.fromkeys(allowed)) or _NO_TOOLS_SENTINEL]
             # Don't load user/project MCP servers in plain-chat mode — their
             # tools would only be extra bait for a wasted tool attempt.
             cmd += ["--strict-mcp-config"]

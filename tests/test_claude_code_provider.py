@@ -126,44 +126,41 @@ def test_to_prompt_passthrough_and_transcript():
     assert "base64" not in prompt  # images are skipped
 
 
-def test_build_cmd_plain_chat_mode_defaults():
-    # Default native choices: web ON (CLI WebSearch/WebFetch), files/bash OFF.
+def test_build_cmd_plain_chat_default_is_tool_less():
+    # Default plain-chat is the ND3X planner brain: tool-less. Whitelist is the
+    # no-tools sentinel (blocks every real/future CLI tool), no disallow list.
+    from services.providers.claude_code_provider import _NO_TOOLS_SENTINEL
     p = ClaudeCodeChatProvider(default_model="sonnet")
     cmd = p._build_cmd("sonnet", "instructies")
     assert cmd[:2] == ["claude", "-p"]
     assert ["--model", "sonnet"] == cmd[2:4]
     system = cmd[cmd.index("--append-system-prompt") + 1]
-    assert system.startswith("instructies") and "Only use these tools" in system
+    assert system.startswith("instructies") and "planning brain" in system
     assert ["--max-turns", str(NON_AGENTIC_MAX_TURNS)] == \
         cmd[cmd.index("--max-turns"):cmd.index("--max-turns") + 2]
-    allowed = cmd[cmd.index("--allowedTools") + 1]
-    assert "WebSearch" in allowed and "WebFetch" in allowed
-    disallowed = cmd[cmd.index("--disallowedTools") + 1]
-    assert "Bash" in disallowed and "Read" in disallowed
-    assert "WebSearch" not in disallowed
+    assert cmd[cmd.index("--allowedTools") + 1] == _NO_TOOLS_SENTINEL
+    assert "--disallowedTools" not in cmd  # whitelist, not blocklist
     assert "--strict-mcp-config" in cmd
     assert "--permission-mode" not in cmd
 
 
-def test_build_cmd_plain_chat_all_native_off():
-    # Orchestrator owns everything: no allowlist, full disallow, hard no-tools
-    # instruction.
-    p = ClaudeCodeChatProvider(default_model="sonnet", native_web=False)
-    cmd = p._build_cmd("sonnet", "instructies")
-    assert "--allowedTools" not in cmd
-    assert NON_AGENTIC_DISALLOWED_TOOLS in cmd
-    assert NON_AGENTIC_INSTRUCTION in cmd[cmd.index("--append-system-prompt") + 1]
+def test_build_cmd_plain_chat_native_web_whitelists_only_web():
+    # web_search_service opts in: WebSearch/WebFetch allowed, nothing else.
+    p = ClaudeCodeChatProvider(default_model="sonnet", native_web=True)
+    cmd = p._build_cmd("sonnet", None)
+    allowed = cmd[cmd.index("--allowedTools") + 1]
+    assert "WebSearch" in allowed and "WebFetch" in allowed
+    assert "Bash" not in allowed and "Read" not in allowed
+    assert "--disallowedTools" not in cmd
 
 
 def test_build_cmd_plain_chat_native_groups():
-    p = ClaudeCodeChatProvider(default_model="sonnet", native_web=False,
+    p = ClaudeCodeChatProvider(default_model="sonnet",
                                native_files=True, native_bash=False)
     cmd = p._build_cmd("sonnet", None)
     allowed = cmd[cmd.index("--allowedTools") + 1]
     assert "Read" in allowed and "Glob" in allowed and "Grep" in allowed
     assert "WebSearch" not in allowed and "Bash" not in allowed
-    disallowed = cmd[cmd.index("--disallowedTools") + 1]
-    assert "Read" not in disallowed and "Bash" in disallowed and "WebSearch" in disallowed
 
 
 def test_build_cmd_agentic_mode():
@@ -373,20 +370,23 @@ def test_health_check_reports_cli_presence(monkeypatch):
     assert missing["status"] == "unconfigured"
 
 
-def test_factory_parses_native_choices():
+def test_factory_builds_tool_less_planner():
+    # The factory-built chat provider is the ND3X planner brain: always
+    # tool-less, regardless of config_json.native_* (those govern only the
+    # separate web_search_service flow). Enabling a native tool in the planner
+    # would make Claude Code run its own tool instead of producing the plan.
     import models.provider as pv
     from services.providers.provider_factory import _build_chat_provider
 
     p = pv.Provider(
         name="CCN", provider_type="claude_code",
-        config_json=json.dumps({"native_web": False, "native_files": True}),
+        config_json=json.dumps({"native_web": True, "native_files": True}),
     )
     provider = _build_chat_provider(p, None, "sonnet", None)
-    assert provider._native == {"web": False, "files": True, "bash": False}
-    # Defaults when config_json is empty: web on, files/bash off.
+    assert provider._native == {"web": False, "files": False, "bash": False}
     p2 = pv.Provider(name="CCN2", provider_type="claude_code")
     assert _build_chat_provider(p2, None, "sonnet", None)._native == \
-        {"web": True, "files": False, "bash": False}
+        {"web": False, "files": False, "bash": False}
 
 
 def test_web_search_capability_claude_code_default_on():
