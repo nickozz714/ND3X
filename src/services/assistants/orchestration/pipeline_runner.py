@@ -1028,9 +1028,20 @@ class AssistantPipelineRunner:
                             )
                             _narration.append({"kind": "tool", "text": f"Using {_tool}", "ts": time.time()})
                     payload["_narration"] = _narration
-                plan_resp = SimpleNamespace(
-                    text=json.dumps({"action": "final", "final_answer": _answer})
-                )
+                # A FULLY schema-valid final plan (planner.schema.json requires
+                # all of these) so plan validation passes — a partial plan makes
+                # the validator retry the "planner" and loop into
+                # plan_validation_failed.
+                plan_resp = SimpleNamespace(text=json.dumps({
+                    "action": "final",
+                    "reason": "Answered by the Claude Code agent.",
+                    "say": "",
+                    "tool_calls": [],
+                    "response_mode": "synthesize_answer",
+                    "search_keywords": [],
+                    "final_answer": _answer,
+                    "downstream_handoff": None,
+                }))
             except Exception as _cc_exc:  # noqa: BLE001 — surface as a planner error
                 self.trace_fn(
                     trace, thread_id=session_id, turn_id=turn_id,

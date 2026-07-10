@@ -130,6 +130,28 @@ def test_run_without_provider_raises(db):
         asyncio.run(ClaudeCodeChatAgent(db).run(user_input="x"))
 
 
+def test_final_plan_wrapper_is_schema_valid():
+    # The pipeline wraps the agent's answer as a final plan; it must satisfy the
+    # planner schema in full (all fields required) or plan validation loops into
+    # plan_validation_failed. This mirrors the dict built in pipeline_runner.
+    import json
+    from services.assistants.plan_validator import validate_plan
+
+    schema = json.load(open(
+        "src/services/assistants/runtime/system_specs/planner.schema.json"))
+    plan = {
+        "action": "final",
+        "reason": "Answered by the Claude Code agent.",
+        "say": "",
+        "tool_calls": [],
+        "response_mode": "synthesize_answer",
+        "search_keywords": [],
+        "final_answer": "Het antwoord van de agent.",
+        "downstream_handoff": None,
+    }
+    assert validate_plan(plan, schema) == []
+
+
 def test_router_chat_provider_type():
     from services.providers.llm_router import LLMRouter
 
