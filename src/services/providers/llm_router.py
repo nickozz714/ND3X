@@ -232,14 +232,23 @@ class LLMRouter:
         'anthropic', 'ollama'), or None when it falls through to the OpenAI base
         path. Lets the pipeline branch on the planner provider (option A: run
         Claude Code as a full agent instead of the ND3X planner loop)."""
+        return self.chat_provider_and_model(model, role)[0]
+
+    def chat_provider_and_model(self, model: Optional[str] = None,
+                                role: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+        """(provider_type, effective_model) for this role/model. The effective
+        model is what the resolved provider (its routing slot) actually uses —
+        for claude_code that's the Claude model assigned on the chat.planner
+        slot, NOT any foreign pin the caller passed. Returns (None, None) on the
+        OpenAI base path."""
         try:
             resolved = self._resolve_chat(model, role)
         except Exception:  # noqa: BLE001
-            return None
+            return None, None
         if resolved is None:
-            return None
-        provider, _ = resolved
-        return getattr(provider, "provider_type", None)
+            return None, None
+        provider, eff_model = resolved
+        return getattr(provider, "provider_type", None), (eff_model or model)
 
     def resolves_to_openai(self, model: Optional[str] = None, role: Optional[str] = None) -> bool:
         """True when this role/model uses the OpenAI base path, where the planner JSON comes

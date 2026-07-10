@@ -428,3 +428,16 @@ def test_web_search_service_honors_native_web_choice(monkeypatch):
     out = ws_claude_code(db, p_on.id, None, "opus", "weer Urmond", 5)
     assert out["ok"] is True and "Urmond" in out["answer"]
     db.close()
+
+
+def test_claude_code_model_coercion():
+    from services.providers.claude_code_provider import claude_code_model
+    # Claude aliases + full ids pass through unchanged.
+    assert claude_code_model("opus") == "opus"
+    assert claude_code_model("sonnet") == "sonnet"
+    assert claude_code_model("claude-opus-4-8") == "claude-opus-4-8"
+    # Non-Claude models (a GPT/local pin from another slot) fall back.
+    assert claude_code_model("gpt-5.4-mini") == "opus"
+    assert claude_code_model("qwen2.5:14b") == "opus"
+    assert claude_code_model(None) == "opus"
+    assert claude_code_model("", default="sonnet") == "sonnet"

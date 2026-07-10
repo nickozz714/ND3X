@@ -72,8 +72,12 @@ class ClaudeCodeChatAgent:
         extra_args = list(cfg.get("extra_args") or [])
         if mcp_config_path:
             extra_args += ["--mcp-config", mcp_config_path]
+        # The turn's model may be a non-Claude id (a GPT pin from another slot);
+        # the CLI can't run those, so coerce to a Claude model.
+        from services.providers.claude_code_provider import claude_code_model
+        default_model = claude_code_model(model or cfg.get("default_model"))
         return ClaudeCodeChatProvider(
-            default_model=model or cfg.get("default_model") or "opus",
+            default_model=default_model,
             oauth_token=key,
             cli_path=str(cfg.get("cli_path") or "claude"),
             agentic=True,  # full autonomous agent for the chat turn
@@ -125,16 +129,19 @@ class ClaudeCodeChatAgent:
     def _prepare(self, model: Optional[str], extra_instructions: Optional[str],
                  skill_names: Optional[List[str]]):
         """Shared setup for run/run_stream: gateway config, provider, prompt,
-        instructions (agent + selected-skill how-to + any extra)."""
+        instructions (agent + selected-skill how-to + any extra), and the
+        Claude-coerced model to use (a non-Claude pin can't run in the CLI)."""
+        from services.providers.claude_code_provider import claude_code_model
+        cc_model = claude_code_model(model)
         mcp_config_path = self._write_gateway_config()
-        provider = self._build_provider(model, mcp_config_path)
+        provider = self._build_provider(cc_model, mcp_config_path)
         instructions = _AGENT_INSTRUCTION
         skills_block = self._skill_instructions_block(skill_names)
         if skills_block:
             instructions = f"{instructions}\n\n{skills_block}"
         if extra_instructions:
             instructions = f"{instructions}\n\n{extra_instructions}"
-        return provider, instructions, mcp_config_path
+        return provider, instructions, mcp_config_path, cc_model
 
     async def run(
         self,
@@ -145,13 +152,13 @@ class ClaudeCodeChatAgent:
         skill_names: Optional[List[str]] = None,
     ) -> str:
         """Run the turn and return the agent's natural-language answer."""
-        provider, instructions, mcp_config_path = self._prepare(model, extra_instructions, skill_names)
+        provider, instructions, mcp_config_path, cc_model = self._prepare(model, extra_instructions, skill_names)
         prompt = self._to_prompt(user_input)
         log.infox("Claude Code chat-agent run gestart",
                   has_nd3x_tools=mcp_config_path is not None, prompt_chars=len(prompt or ""),
-                  skills=skill_names or [])
+                  skills=skill_names or [], model=cc_model)
         try:
-            result = await provider.chat(prompt, instructions=instructions, model=model)
+            result = await provider.chat(prompt, instructions=instructions, model=cc_model)
         finally:
             if mcp_config_path:
                 try:
@@ -171,12 +178,12 @@ class ClaudeCodeChatAgent:
     ) -> AsyncIterator[Dict[str, Any]]:
         """Stream typed agent events: 'thinking'/'tool' (the agent working — for
         the steps view) vs 'answer' (the final reply — for the chat)."""
-        provider, instructions, mcp_config_path = self._prepare(model, extra_instructions, skill_names)
+        provider, instructions, mcp_config_path, cc_model = self._prepare(model, extra_instructions, skill_names)
         prompt = self._to_prompt(user_input)
         log.infox("Claude Code chat-agent event-stream gestart",
-                  has_nd3x_tools=mcp_config_path is not None, skills=skill_names or [])
+                  has_nd3x_tools=mcp_config_path is not None, skills=skill_names or [], model=cc_model)
         try:
-            async for ev in provider.chat_stream_events(prompt, instructions=instructions, model=model):
+            async for ev in provider.chat_stream_events(prompt, instructions=instructions, model=cc_model):
                 yield ev
         finally:
             if mcp_config_path:

@@ -974,10 +974,11 @@ class AssistantPipelineRunner:
         # here. Not for workflow-background turns (those use the claude_code
         # workflow engine).
         _cc_type = None
+        _cc_model = model
         try:
-            _cc_probe = getattr(self.openai, "chat_provider_type", None)
+            _cc_probe = getattr(self.openai, "chat_provider_and_model", None)
             if callable(_cc_probe) and not is_workflow_background:
-                _cc_type = _cc_probe(model, planner_role)
+                _cc_type, _cc_model = _cc_probe(model, planner_role)
         except Exception:  # noqa: BLE001
             _cc_type = None
         if _cc_type == "claude_code":
@@ -994,7 +995,7 @@ class AssistantPipelineRunner:
                     _answer = ""
                     _narration = list(payload.get("_narration") or [])
                     async for _ev in _agent.run_stream_events(
-                        user_input=plan_input, model=model,
+                        user_input=plan_input, model=_cc_model,
                         skill_names=selected_skill_names,
                     ):
                         _kind = _ev.get("kind")

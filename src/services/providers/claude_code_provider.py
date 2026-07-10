@@ -84,6 +84,20 @@ NON_AGENTIC_INSTRUCTION = (
     "your own tools are disabled. Just return the requested planning text/JSON."
 )
 
+
+def claude_code_model(model: Optional[str], *, default: str = "opus") -> str:
+    """Coerce a routing model to one the Claude Code CLI can actually run.
+
+    The chat/voice flow may hand us a non-Claude model (e.g. a pinned
+    'gpt-5.4-mini' from a different slot) even when the planner slot resolved to
+    claude_code. The CLI only runs Claude models, so a foreign id makes it exit
+    with 'issue with the selected model …'. Accept the tier aliases and any
+    'claude*' id; otherwise fall back to the provider default."""
+    m = (model or "").strip().lower()
+    if m in ("opus", "sonnet", "haiku") or m.startswith("claude"):
+        return model  # keep original casing
+    return default
+
 # Named native-capability groups: the EXPLICIT choice of what runs inside the
 # Claude Code CLI vs what stays with the ND3X orchestrator. Configured per
 # provider (config_json: native_web / native_files / native_bash) and honored

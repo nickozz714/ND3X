@@ -94,7 +94,10 @@ class ClaudeCodeOperationRunner:
 
         exec_cfg = operation_config.get("execution") if isinstance(operation_config.get("execution"), dict) else {}
         # Model: per-step override wins, else the provider default, else a alias.
-        model_id = model or exec_cfg.get("model") or cfg.get("default_model") or "opus"
+        # Coerce to a Claude model — a non-Claude id (e.g. an orchestrator pin)
+        # can't run in the CLI.
+        from services.providers.claude_code_provider import claude_code_model
+        model_id = claude_code_model(model or exec_cfg.get("model") or cfg.get("default_model"))
 
         # Give the autonomous run ND3X's own tools + MCP servers (Fabric, board,
         # …) via the gateway, unless the step opts out. Web tools stay the CLI's

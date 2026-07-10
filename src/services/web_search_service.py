@@ -124,8 +124,9 @@ def _claude_code(db: Session, provider_id: int, key: str | None, model: str,
             "(native_web=false in its config). Enable it there, or assign a "
             "web-search-capable model from another provider.")}
 
+    from services.providers.claude_code_provider import claude_code_model
     prov = ClaudeCodeChatProvider(
-        default_model=model,
+        default_model=claude_code_model(model),
         oauth_token=key,
         cli_path=str(cfg.get("cli_path") or "claude"),
         agentic=False,
