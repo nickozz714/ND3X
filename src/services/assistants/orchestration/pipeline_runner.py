@@ -985,9 +985,35 @@ class AssistantPipelineRunner:
             from services.assistants.claude_code_chat_agent import ClaudeCodeChatAgent
             try:
                 with SessionLocal() as _agent_db:
-                    _answer = await ClaudeCodeChatAgent(_agent_db).run(
-                        user_input=plan_input, model=model,
-                    )
+                    _agent = ClaudeCodeChatAgent(_agent_db)
+                    if progress_cb is not None:
+                        # Stream the answer live to the chat (answer_partial), as
+                        # the OpenAI planner path does, accumulating the full text.
+                        _acc: list[str] = []
+                        _last_emit = 0.0
+                        async for _delta in _agent.run_stream(
+                            user_input=plan_input, model=model,
+                            skill_names=selected_skill_names,
+                        ):
+                            _acc.append(_delta)
+                            _now = time.monotonic()
+                            if _now - _last_emit >= 0.3:
+                                _last_emit = _now
+                                try:
+                                    progress_cb({
+                                        "type": "answer_partial",
+                                        "turn_id": turn_id,
+                                        "assistant": assistant_name,
+                                        "partial_answer": "".join(_acc),
+                                    })
+                                except Exception:  # noqa: BLE001
+                                    pass
+                        _answer = "".join(_acc)
+                    else:
+                        _answer = await _agent.run(
+                            user_input=plan_input, model=model,
+                            skill_names=selected_skill_names,
+                        )
                 plan_resp = SimpleNamespace(
                     text=json.dumps({"action": "final", "final_answer": _answer})
                 )

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -101,22 +101,55 @@ class ClaudeCodeChatAgent:
         from services.providers.claude_code_provider import _to_prompt
         return _to_prompt(user_input)
 
+    def _skill_instructions_block(self, skill_names: Optional[List[str]]) -> str:
+        """Render the how-to instructions of the turn's selected skills so the
+        agent knows how to use ND3X's skill tools, not just that they exist."""
+        names = [str(n).strip() for n in (skill_names or []) if str(n).strip()]
+        if not names:
+            return ""
+        try:
+            from models.skill import Skill
+            rows = self.db.query(Skill).filter(Skill.name.in_(names)).all()
+        except Exception:  # noqa: BLE001
+            return ""
+        parts: List[str] = []
+        for s in rows:
+            instr = (getattr(s, "instructions", "") or "").strip()
+            if instr:
+                parts.append(f"### Skill: {s.name}\n{instr}")
+        if not parts:
+            return ""
+        return ("Active ND3X skills for this turn — follow their guidance when "
+                "using the related mcp__nd3x tools:\n\n" + "\n\n".join(parts))
+
+    def _prepare(self, model: Optional[str], extra_instructions: Optional[str],
+                 skill_names: Optional[List[str]]):
+        """Shared setup for run/run_stream: gateway config, provider, prompt,
+        instructions (agent + selected-skill how-to + any extra)."""
+        mcp_config_path = self._write_gateway_config()
+        provider = self._build_provider(model, mcp_config_path)
+        instructions = _AGENT_INSTRUCTION
+        skills_block = self._skill_instructions_block(skill_names)
+        if skills_block:
+            instructions = f"{instructions}\n\n{skills_block}"
+        if extra_instructions:
+            instructions = f"{instructions}\n\n{extra_instructions}"
+        return provider, instructions, mcp_config_path
+
     async def run(
         self,
         *,
         user_input: Any,
         model: Optional[str] = None,
         extra_instructions: Optional[str] = None,
+        skill_names: Optional[List[str]] = None,
     ) -> str:
         """Run the turn and return the agent's natural-language answer."""
-        mcp_config_path = self._write_gateway_config()
-        provider = self._build_provider(model, mcp_config_path)
+        provider, instructions, mcp_config_path = self._prepare(model, extra_instructions, skill_names)
         prompt = self._to_prompt(user_input)
-        instructions = _AGENT_INSTRUCTION
-        if extra_instructions:
-            instructions = f"{instructions}\n\n{extra_instructions}"
         log.infox("Claude Code chat-agent run gestart",
-                  has_nd3x_tools=mcp_config_path is not None, prompt_chars=len(prompt or ""))
+                  has_nd3x_tools=mcp_config_path is not None, prompt_chars=len(prompt or ""),
+                  skills=skill_names or [])
         try:
             result = await provider.chat(prompt, instructions=instructions, model=model)
         finally:
@@ -127,3 +160,27 @@ class ClaudeCodeChatAgent:
                     pass
         log.infox("Claude Code chat-agent run afgerond", answer_chars=len(result.text or ""))
         return result.text or ""
+
+    async def run_stream(
+        self,
+        *,
+        user_input: Any,
+        model: Optional[str] = None,
+        extra_instructions: Optional[str] = None,
+        skill_names: Optional[List[str]] = None,
+    ) -> AsyncIterator[str]:
+        """Stream the agent's answer as text deltas (for live chat display). The
+        deltas are the assistant's text; tool calls happen between them."""
+        provider, instructions, mcp_config_path = self._prepare(model, extra_instructions, skill_names)
+        prompt = self._to_prompt(user_input)
+        log.infox("Claude Code chat-agent stream gestart",
+                  has_nd3x_tools=mcp_config_path is not None, skills=skill_names or [])
+        try:
+            async for delta in provider.chat_stream(prompt, instructions=instructions, model=model):
+                yield delta
+        finally:
+            if mcp_config_path:
+                try:
+                    os.unlink(mcp_config_path)
+                except Exception:  # noqa: BLE001
+                    pass
