@@ -984,6 +984,21 @@ class AssistantPipelineRunner:
         if _cc_type == "claude_code":
             from db.database import SessionLocal
             from services.assistants.claude_code_chat_agent import ClaudeCodeChatAgent
+            # Give the agent the CLEAN conversation (history + the question), NOT
+            # the ND3X planner prompt. Feeding it plan_input made it think it was
+            # the planner and emit `{"action":"select_skills",...}` JSON instead
+            # of answering / calling the mcp__nd3x tools.
+            _acs = payload.get("_active_conversation_state") or {}
+            _agent_msgs: list = []
+            for _m in (_acs.get("recent_messages") or []):
+                _role = _m.get("role")
+                _content = _m.get("content")
+                if _role in ("user", "assistant") and isinstance(_content, str) and _content.strip():
+                    _agent_msgs.append({"role": _role, "content": _content})
+            # Append the current question unless it's already the last user turn.
+            if not (_agent_msgs and _agent_msgs[-1]["role"] == "user"
+                    and _agent_msgs[-1]["content"].strip() == (question or "").strip()):
+                _agent_msgs.append({"role": "user", "content": question or ""})
             try:
                 with SessionLocal() as _agent_db:
                     _agent = ClaudeCodeChatAgent(_agent_db)
@@ -995,7 +1010,7 @@ class AssistantPipelineRunner:
                     _answer = ""
                     _narration = list(payload.get("_narration") or [])
                     async for _ev in _agent.run_stream_events(
-                        user_input=plan_input, model=_cc_model,
+                        user_input=_agent_msgs, model=_cc_model,
                         skill_names=selected_skill_names,
                     ):
                         _kind = _ev.get("kind")
