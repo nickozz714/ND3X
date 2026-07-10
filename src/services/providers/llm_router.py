@@ -227,6 +227,20 @@ class LLMRouter:
                   json_mode=(rf.get("type") if isinstance(rf, dict) else bool(rf)))
         return await self._dispatch_chat(provider, eff_model or model, user_input, kwargs, role=role)
 
+    def chat_provider_type(self, model: Optional[str] = None, role: Optional[str] = None) -> Optional[str]:
+        """The provider_type that this role/model resolves to (e.g. 'claude_code',
+        'anthropic', 'ollama'), or None when it falls through to the OpenAI base
+        path. Lets the pipeline branch on the planner provider (option A: run
+        Claude Code as a full agent instead of the ND3X planner loop)."""
+        try:
+            resolved = self._resolve_chat(model, role)
+        except Exception:  # noqa: BLE001
+            return None
+        if resolved is None:
+            return None
+        provider, _ = resolved
+        return getattr(provider, "provider_type", None)
+
     def resolves_to_openai(self, model: Optional[str] = None, role: Optional[str] = None) -> bool:
         """True when this role/model uses the OpenAI base path, where the planner JSON comes
         back as free text (json_schema dropped) and can be streamed as text. Alternate

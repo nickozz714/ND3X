@@ -966,9 +966,46 @@ class AssistantPipelineRunner:
         # route (not the server-side-session route, to avoid touching the response chain).
         # Any failure → fall back to the normal non-streaming call (zero regression).
         plan_resp = None
+        # Option A — Claude Code as a FULL AGENT. When the chat planner slot
+        # resolves to claude_code, don't run the ND3X planner loop (Claude Code is
+        # an autonomous agent and stalls in the plan-JSON role). Instead let it
+        # drive its own agent loop with ND3X's tools/skills/MCP via the gateway,
+        # then wrap its natural-language answer as a final plan so this loop ends
+        # here. Not for workflow-background turns (those use the claude_code
+        # workflow engine).
+        _cc_type = None
+        try:
+            _cc_probe = getattr(self.openai, "chat_provider_type", None)
+            if callable(_cc_probe) and not is_workflow_background:
+                _cc_type = _cc_probe(model, planner_role)
+        except Exception:  # noqa: BLE001
+            _cc_type = None
+        if _cc_type == "claude_code":
+            from db.database import SessionLocal
+            from services.assistants.claude_code_chat_agent import ClaudeCodeChatAgent
+            try:
+                with SessionLocal() as _agent_db:
+                    _answer = await ClaudeCodeChatAgent(_agent_db).run(
+                        user_input=plan_input, model=model,
+                    )
+                plan_resp = SimpleNamespace(
+                    text=json.dumps({"action": "final", "final_answer": _answer})
+                )
+            except Exception as _cc_exc:  # noqa: BLE001 — surface as a planner error
+                self.trace_fn(
+                    trace, thread_id=session_id, turn_id=turn_id,
+                    type="planner_call_error",
+                    summary="Claude Code chat-agent run failed",
+                    data={"assistant": assistant_name, "model": model,
+                          "error": type(_cc_exc).__name__, "message": str(_cc_exc)[:300]},
+                    progress_cb=progress_cb,
+                )
+                raise
+
         _resolves_openai = getattr(self.openai, "resolves_to_openai", None)
         can_stream_planner = (
-            progress_cb is not None
+            plan_resp is None  # not already answered by the Claude Code agent above
+            and progress_cb is not None
             and not planner_keep_context
             and callable(_resolves_openai)
             and bool(_resolves_openai(model, planner_role))
