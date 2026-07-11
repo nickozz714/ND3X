@@ -4,15 +4,17 @@ services/mcp/mcp_gateway.py
 An MCP server that re-exposes ND3X's OWN tools (builtin tools like the board, and
 every enabled MCP server such as Fabric) to the autonomous Claude Code CLI engine
 in a workflow. ND3X stays the source of truth and the auth owner: the gateway
-lists tools from the DB registry and delegates every call to ToolExecutionService,
-which builds the right client and applies the server's auth exactly as the
-orchestrator does. Fabric's tools, and their hops, therefore work through here.
+lists tools from the DB registry and delegates every call back to the MAIN server
+(over a loopback HTTP endpoint, authenticated with an in-process shared secret) —
+because stdio-backed tools like Fabric/OneLake, and their Azure session, are booted
+subprocesses that live only in the main process. Execution therefore happens once,
+where the runtime and auth actually are. (Without the delegation env the handler
+falls back to executing locally — used by tests.)
 
-Transport is **stdio**: the CLI spawns this module as a subprocess and talks over
-stdin/stdout (`--mcp-config` with a `command` entry). No network, no mounting on
-the API, no lifespan juggling — and no shared secret, because it's a child
-process, not an open endpoint. It runs on the back-end host and reuses the same
-DB config (SessionLocal), so it sees exactly the tools the agent sees.
+Transport to the CLI is **stdio**: the CLI spawns this module as a subprocess and
+talks over stdin/stdout (`--mcp-config` with a `command` entry). It runs on the
+back-end host and reuses the same DB config (SessionLocal) for LISTING tools, so
+it sees exactly the tools the agent sees.
 
 Web tools are excluded on purpose — the CLI has its own WebSearch/WebFetch, so
 routing those back through ND3X would be a wasted hop.
@@ -33,6 +35,35 @@ _EXCLUDED_TOOL_NAMES = {"web_search", "web_fetch"}
 
 # The MCP server name the CLI sees; tools show up as mcp__nd3x__<tool>.
 SERVER_NAME = "nd3x"
+
+
+async def _execute_tool(tool_id: int, args: Dict[str, Any]) -> Any:
+    """Run one tool. When delegation env is set (the normal case), call back into
+    the main server so stdio-backed tools (Fabric/OneLake) and their Azure session
+    run there. Otherwise execute locally in this process (non-delegated / tests)."""
+    url = os.environ.get("ND3X_INTERNAL_URL")
+    token = os.environ.get("ND3X_INTERNAL_TOKEN")
+    if url and token:
+        return await _delegate_execute(url, token, tool_id, args)
+    from db.database import SessionLocal
+    from services.mcp.tool_execution_service import ToolExecutionService as _TES
+    with SessionLocal() as call_db:
+        return await _TES(call_db).execute_tool(tool_id, args)
+
+
+async def _delegate_execute(url: str, token: str, tool_id: int, args: Dict[str, Any]) -> Any:
+    """POST the tool call to the main server's internal execute endpoint."""
+    import httpx
+    endpoint = url.rstrip("/") + "/api/internal/mcp/execute"
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        resp = await client.post(
+            endpoint,
+            headers={"X-ND3X-Internal-Token": token},
+            json={"tool_id": tool_id, "args": args},
+        )
+    resp.raise_for_status()
+    data = resp.json()
+    return data.get("result") if isinstance(data, dict) else data
 
 
 def _tool_to_schema(argument: Any) -> Dict[str, Any]:
@@ -67,13 +98,8 @@ def _list_gateway_tools(db) -> List[Any]:
         server_name = getattr(server, "name", None)
 
         def _make_handler(_tool_id: int):
-            # Each call opens its own session + service so clients/auth resolve
-            # fresh (the gateway process is long-lived across the CLI session).
             async def _handler(**kwargs: Any) -> Any:
-                from db.database import SessionLocal
-                from services.mcp.tool_execution_service import ToolExecutionService as _TES
-                with SessionLocal() as call_db:
-                    return await _TES(call_db).execute_tool(_tool_id, kwargs or {})
+                return await _execute_tool(_tool_id, kwargs or {})
             return _handler
 
         out.append(FunctionTool(
@@ -164,6 +190,21 @@ def mcp_config_for_cli(*, python: str | None = None, cwd: str | None = None) -> 
         "LOG_DB_ENABLED": "false",
         "LOG_FILE": "",
     }
+    # Delegation target: the child LISTS tools from the DB itself, but EXECUTES
+    # them by calling back into this (main) process over HTTP, so stdio-backed
+    # tools (Fabric/OneLake) and their Azure session run once, here. Without these
+    # two vars the child falls back to executing locally (tests / non-delegated
+    # use). HOST 0.0.0.0 means "all interfaces" — the child reaches us on loopback.
+    try:
+        from component.config import settings as _settings
+        from services.mcp.internal_auth import INTERNAL_MCP_TOKEN
+        _host = (getattr(_settings, "HOST", "") or "127.0.0.1")
+        if _host in ("0.0.0.0", "", "::"):
+            _host = "127.0.0.1"
+        env["ND3X_INTERNAL_URL"] = f"http://{_host}:{int(getattr(_settings, 'PORT', 8088))}"
+        env["ND3X_INTERNAL_TOKEN"] = INTERNAL_MCP_TOKEN
+    except Exception:  # noqa: BLE001 — without these the child executes locally
+        pass
     # Pass through the DB/config env so the child sees the same registry.
     for k in ("SQLITE_PATH", "SQLITE_URL", "DB_DIALECT", "DB_HOST", "DB_NAME",
               "DB_USER", "DB_PASSWORD", "DB_PORT", "MYSQL_URL", "ND3X_DATA_DIR",

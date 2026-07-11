@@ -999,6 +999,21 @@ class AssistantPipelineRunner:
             if not (_agent_msgs and _agent_msgs[-1]["role"] == "user"
                     and _agent_msgs[-1]["content"].strip() == (question or "").strip()):
                 _agent_msgs.append({"role": "user", "content": question or ""})
+            # Memory injection. The orchestrator already selected the relevant
+            # memories into payload["_planner_memory_context"] (and marked them
+            # injected). The normal planner loop consumes them, but this option-A
+            # agent path did not — so Claude Code chat turns never "remembered".
+            # Feed those memories to the agent as extra instructions.
+            _mem_ctx = payload.get("_planner_memory_context") or {}
+            _mem_lines = []
+            for _mi in (_mem_ctx.get("memories") or []):
+                _c = (_mi.get("content") or "").strip() if isinstance(_mi, dict) else str(_mi).strip()
+                if _c:
+                    _mem_lines.append(f"- {_c}")
+            _mem_block = (
+                "Relevant remembered context about this user/project (from ND3X memory — "
+                "use it when helpful; don't repeat it verbatim):\n" + "\n".join(_mem_lines)
+            ) if _mem_lines else None
             try:
                 with SessionLocal() as _agent_db:
                     _agent = ClaudeCodeChatAgent(_agent_db)
@@ -1012,6 +1027,7 @@ class AssistantPipelineRunner:
                     async for _ev in _agent.run_stream_events(
                         user_input=_agent_msgs, model=_cc_model,
                         skill_names=selected_skill_names,
+                        extra_instructions=_mem_block,
                     ):
                         _kind = _ev.get("kind")
                         if _kind == "answer":

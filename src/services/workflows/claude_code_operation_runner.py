@@ -32,9 +32,19 @@ from services.providers.registry_service import ProviderRegistryService
 
 log = get_logger(__name__)
 
-_HANDOFF_INSTRUCTION = (
-    "You are running as one autonomous step inside an ND3X workflow. Do the task "
-    "using your own tools; never ask the user anything.\n\n"
+def _handoff_instruction() -> str:
+    """Workflow-step instruction: the shared ND3X world-context + the handoff
+    tail. Shares ND3X_AGENT_PREAMBLE with the chat agent so the workflow step
+    also knows ND3X's tools live under mcp__nd3x, respects the host-boundary and
+    replies in the user's language — the exact context the chat agent gained."""
+    from services.providers.claude_code_provider import ND3X_AGENT_PREAMBLE
+    return ND3X_AGENT_PREAMBLE + "\n\n" + _HANDOFF_TAIL
+
+
+_HANDOFF_TAIL = (
+    "You are running as one autonomous step inside an ND3X workflow (no user is "
+    "watching — never ask a question; build on the earlier steps' outcomes given "
+    "to you).\n\n"
     "When finished, your LAST message must be a single JSON object and nothing "
     "else, matching:\n"
     "{\n"
@@ -173,7 +183,7 @@ class ClaudeCodeOperationRunner:
             question_length=len(question or ""), nd3x_tools=mcp_config_path is not None,
         )
         try:
-            result = await provider.chat(prompt, instructions=_HANDOFF_INSTRUCTION)
+            result = await provider.chat(prompt, instructions=_handoff_instruction())
         finally:
             if mcp_config_path:
                 try:

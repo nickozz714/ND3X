@@ -34,6 +34,7 @@ from .secrets import router as secrets_routes
 from .board_router import router as board_routes
 from .background_task_router import router as background_task_routes
 from .repository_router import router as repository_routes
+from .internal_mcp_router import router as internal_mcp_routes
 
 all_routers = [
     authenticate_router,
@@ -72,4 +73,5 @@ all_routers = [
     board_routes,
     background_task_routes,
     repository_routes,
+    internal_mcp_routes,
 ]

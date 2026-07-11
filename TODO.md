@@ -1,0 +1,279 @@
+# ND3X — TODO
+
+## Claude Code agent: dynamische ND3X-context-manifest (pinpointed)
+_Aangedragen 2026-07-11. Kandidaat voor een nachtrun. Onderzoek is af; bouwen nog niet._
+
+**Doel:** de wereld-context die de Claude Code-agent krijgt (chat + workflow) dynamisch uit
+de DB opbouwen — net als de orchestrator's `PromptBuilder` — maar toegespitst op Claude Code,
+in plaats van de nu handgeschreven statische `ND3X_AGENT_PREAMBLE`.
+
+**Bouw een dunne `build_nd3x_agent_context(db)`** die assembleert:
+- **Wereld-model** (statisch): wat ND3X is, host-grens, taal → houden.
+- **Skill-catalogus** (dynamisch, DB): naam + beschrijving van enabled, niet-system/niet-runtime
+  skills. Hergebruik `PromptBuilder.render_skill_catalog`-query. Dit is de echte winst — Claude
+  Code weet nu niet welke capability-bundels bestaan.
+- **Verbonden MCP-servers bij naam** (dynamisch): vervangt de hardcoded "e.g. Fabric".
+- **Skill-files**: per (geselecteerde) skill het `skill_files_root`-pad meegeven, zodat Claude
+  Code's eigen Read/Bash de scripts kan lezen/draaien (file-backed skills). Dit is de enige
+  ontbrekende draad om file-backed skills bruikbaar te maken.
+
+**Nadrukkelijk NIET meenemen:**
+- Tool-voor-tool manifest → de gateway exposet tools al native via MCP (naam+desc+schema).
+- Orchestrator-instructieteksten / `tool_id` / `action=select_skills` / plan-schema → brengt
+  precies de planner-JSON-verwarring terug die we op 2026-07-10 wegwerkten.
+
+**Aansluiting:** chat (`_agent_instruction`) en workflow (`_handoff_instruction`) delen al de
+preamble; beide gaan `build_nd3x_agent_context(db)` aanroepen (chat-agent heeft `self.db`, de
+runner `self.db`). Selectie: geselecteerde skills volledig (instructie + files_root), de rest
+als lichte catalogus. Let op de twee betekenissen van "skill" (ND3X vs Claude Code's eigen).
+
+## HABIT4T — smart-home MCP-server (TADO + TOSOT + HUE + TUYA) — STANDALONE
+_Aangedragen 2026-07-11. **Standalone product, BUITEN de ND3X-repos** — eigen map + eigen git-repo._
+
+> ⚠️ **NACHTRUN-MODUS: ALLEEN BOUWEN (Nick, 2026-07-11).** Bouw in `../HABIT4T/` de codebase, adapters,
+> trait-model, MCP-server, registry, tools, `.env.example`, README/Dockerfile en **mock-tests** (fake
+> UDP/HTTP/signed-cloud). `git init` in die map + eigen feature-branch. **NIET doen** (geblokkeerd op Nick,
+> vereist creds/hardware/LAN): stap 0 live LAN-discovery, TADO device-code login, HUE link-knop, Tuya-keys,
+> en élke call naar een echt apparaat/cloud-account. **Vink dit item NIET af** — laat het open met een
+> notitie "code klaar, echte-apparaat-verificatie wacht op Nick". Alleen mock-tests hoeven groen.
+
+**→ Volledige design-spec: `/Users/nickduchatinier/Repositories/Claude/HABIT4T/DESIGN.md`**
+(authoritative, 16 secties; hier alleen samenvatting). Los van ND3X; ND3X-registratie is optioneel (§12).
+**→ Operator-gids: `HABIT4T/README.md`** — exacte stappen die Nick zélf uitvoert (onboarding TADO/HUE/
+Tuya, LAN-checks) + curl/Postman-voorbeelden. **Nachtrun:** houd deze README synchroon met de echte
+interface en lever bij de bouw een `postman_collection.json` (host/port als variabelen).
+**Autonomie:** codebase + adapters + mock-tests zijn autonoom bouwbaar; ECHTE-apparaat-verificatie is
+geblokkeerd op Nick (browser-login TADO, link-knop HUE, Tuya-keys, Gree op het LAN) — dus "bouwen kan
+autonoom, verifiëren doen we samen".
+
+**Doel:** één stdio-MCP-server die smart-home-apparaten uitleest én bestuurt over vendors heen
+(TADO + TOSOT nu; Philips HUE + TUYA later), achter één **trait-gebaseerd** device-model. ND3X
+combineert info (TADO-temp → TOSOT bijsturen/uit) via een cron-workflow. NIET via Home Assistant.
+
+**Keuzes met Nick (2026-07-11, AskUserQuestion):**
+- **Standalone stdio MCP** (zoals Fabric), één proces met vendor-adapters, in `ND3X-services/HABIT4T/`.
+  Werknaam HABIT4T (vrij te hernoemen). Werkt mee door de fixes van vandaag (stdio-manager bedraad,
+  gateway-delegatie, 64 MB readline-limiet).
+- **TOSOT eerst onderzoeken** (nightrun stap 0): lokaal (greeclimate UDP, same-LAN) vs cloud
+  (Tuya/Ewpe) → LAN-check, beslissen, documenteren, dán bouwen.
+- **Beide tool-niveaus**: vendor-neutrale `home_*` tools + dunne `home_sync`; primaire combineer-weg
+  is een ND3X cron-workflow ("climate-guard").
+
+**Kern-ontwerp (zie DESIGN.md voor alles):** trait-model (OnOff/Thermostat/TemperatureSensor/
+FanSpeed/Brightness/Color/…) i.p.v. climate-only, zodat HUE/TUYA er later onder passen; `VendorAdapter`
+protocol als enige extensiepunt; persistente device-registry met stabiele ids + rooms; secrets via
+env/secret-store (nooit naar AI); onboarding-CLIs per vendor (TADO device-code, HUE link-button,
+Tuya keys). 14-stappen build-volgorde staat in DESIGN.md §14.
+
+**TADO auth-drift:** password-grant deprecated (2025) → device-code flow (client_id
+`1bb50063-6b0c-4d11-bd99-387f4a91cc46`, `login.tado.com/oauth2`, PyTado). **Live verifiëren** bij bouw.
+
+## Gateway ↔ stdio MCP + Azure-sessie — ✅ OPGELOST (2026-07-11)
+Gekozen + gebouwd: gateway **delegeert** tool-executie naar de hoofdserver (interne endpoint
+`/api/internal/mcp/execute` + in-memory shared secret). Eén runtime, één Azure-sessie. Fabric
+E2E bewezen (200). Zie worklog.
+
+## Gegeneraliseerd "agent-mode" framework voor CLI-agent-providers (Claude Code, later Codex, …)
+_Aangedragen 2026-07-11 (Nick). Onderzoek gedaan; ontwerp, nog niet gebouwd. Overkoepelt het
+cognition-item hieronder._
+
+**Kernmodel (Nick, 2026-07-11) — TWEE ASSEN:**
+
+*As 1 — provider-modus (per slot, o.b.v. de toegewezen provider):*
+- **Model-modus** (orchestrator-native): de orchestrator stuurt de LLM aan via z'n eigen meerstaps-
+  logica; het model levert alleen antwoorden/structured output. Klassieke pad.
+- **Systeem-modus** (CLI-gedelegeerd — naam TBD, kandidaten: "agent"/"system"/"delegated"): de slot
+  resolvet naar een CLI-agent die z'n EIGEN agent-loop met EIGEN tools draait. De orchestrator besteedt
+  veel per-stap-werk uit, maar **stuurt de ND3X-skills + MCP-servers + tools mee** (via de gateway)
+  zodat de LLM-in-het-systeem die kan gebruiken. = wat we nu met Claude Code doen.
+
+*As 2 — capability-klasse (kan het überhaupt uitbesteed worden?):*
+- **Uitbesteedbaar** (tekst/redeneren/beslissen): planner, workflow-stap, cognition/memory-extractie,
+  memory_decision, auto_decision, router, generators. → mag systeem-modus, mits provider = CLI-agent.
+- **Orchestrator-only** (modaliteit/realtime): TTS, STT, Live duplex/realtime, embeddings, image-gen.
+  → CLI-agent heeft er geen interface voor; ALTIJD in de orchestrator, CLI-agent op zo'n slot = verboden.
+
+**Modus-namen (Nick, 2026-07-11): `model` en `agent`** (provider `execution_mode`). Belangrijk: het
+"waarom" moet duidelijk gedocumenteerd zijn — `model` = orchestrator stuurt de LLM aan via z'n eigen
+meerstaps-logica en dwingt structured output af; `agent` = de provider draait z'n eigen agent-loop met
+eigen tools, wij sturen ND3X-skills/MCP/tools mee, en hij levert een resultaat via een output-contract
+(geen schema-enforcement — CLI-agents kunnen dat niet: `supports_structured_output=False`, `.chat()`
+negeert `response_format`).
+
+**GEEN fallbacks (Nick, 2026-07-11 — kernprincipe).** De slot-toewijzing ÍS de configuratie; het
+systeem gokt niet:
+- **Leeg slot → de stap gebeurt niet** (feature off). (Bestaat al voor `chat.memory_decision`: "runs
+  ONLY when the slot has a model assigned".) Dit wordt de norm voor álle uitbesteedbare slots.
+- **Agent op een slot → agent-modus draait** — terecht, want die slot ondersteunt het. Geen stille
+  terugval naar een structured model, geen "broken structured call" meer. (De huidige gap waarbij
+  decision-slots op claude_code stil terugvielen op `claude_code.chat` met gedropt schema = juist wat
+  we wegnemen: die slots krijgen een echte agent-modus i.p.v. een fallback.)
+- **Model op een slot → model-modus draait.**
+- **Modaliteit/realtime-slots** (TTS/STT/Live/embeddings/image): een CLI-agent is daar simpelweg
+  **niet toewijsbaar** — afdwingen bij de toewijzing (UI/registry biedt 't niet aan), niet via een
+  runtime-fallback. Proza-slots (final_answer/writer, web_search) draaien al als plain chat.
+
+**Nu nog fout:** "systeem-modus" is hard vastgepind op de string `"claude_code"` en per subsysteem apart
+gebouwd (ClaudeCodeChatAgent, ClaudeCodeOperationRunner, web_search `_claude_code`). Moet **capability-
+based** (`provider.is_cli_agent`) en **provider-agnostisch** (Codex e.a. later).
+
+**Kaart — waar agent-mode is / moet / niet kan:**
+| Slot / rol | Structured JSON? | Status |
+|---|---|---|
+| chat.planner | ja (plan) | ✅ done — option-A agent (pipeline_runner:984) |
+| workflow-stap | ja (handoff-envelope) | ✅ done — claude_code engine |
+| chat.web_search | nee (proza) | ✅ done — native CLI search |
+| chat.final_answer / writer: | nee (proza) | ✅ werkt als plain chat |
+| chat.cognition (+ generators: skill/workflow/meeting/finalizer) | ja | ❌ TODO — blackbox agent (zie hieronder) |
+| chat.memory_decision | ja (klein) | ❌ TODO — agent-modus (leeg=uit, agent=agent); geen fallback |
+| chat.auto_decision | ja (klein) | ❌ TODO — idem |
+| chat.router | ja | ❌ TODO — idem |
+| embeddings/image/realtime/transcription | n.v.t. | ❌ CLI-agent NIET toewijsbaar (afdwingen bij toewijzing) |
+
+**Generalisatie (3 stukken):**
+1. **Capability i.p.v. naam.** Voeg op de provider-base een marker toe (bv. `is_cli_agent: bool` /
+   `agent_capabilities`) i.p.v. `if provider_type == "claude_code"`. Elke CLI-agent-provider (claude_code,
+   toekomstige codex) zet 'm True; subsystemen branchen op de capability. Dit is het "niet vastpinnen
+   op Claude"-deel.
+2. **Gedeelde `CliAgentRunner` base.** ClaudeCodeChatAgent + ClaudeCodeOperationRunner delen nu al veel
+   (env strippen, gateway-config, provider bouwen, spawnen, envelope parsen). Til dat op naar één base;
+   per subsysteem verschilt alleen de INSTRUCTIE + het output-contract + de parse. Nieuwe targets
+   (cognition) en nieuwe agents (CodexRunner) zijn dan kleine subclasses.
+3. **Per-slot gedrag = de toewijzing, geen fallback (beslist).** Leeg → stap uit; agent → agent-modus;
+   model → model-modus. Modaliteit-slots: CLI-agent niet toewijsbaar (afdwingen in UI/registry). Dus
+   ook de kleine decision-slots (memory_decision/auto_decision/router) krijgen een echte agent-modus
+   (envelope, tolerant parsen) wanneer er een agent op staat — geen stille terugval meer.
+
+**Provider-agnostisch (Codex-ready):** de agent-specifieke details (CLI-commando, auth-env, model-coercion,
+gateway) horen achter de provider/runner-abstractie, niet in de subsysteem-branches. Een nieuwe CLI-agent
+toevoegen = een provider met `is_cli_agent=True` + een runner-subclass, geen wijziging in chat/workflow/
+cognition-code.
+
+---
+
+### IMPLEMENTATIEPLAN (gefaseerd) — agent-mode framework
+_Feature-branch only, decide+log. Experimenteren/live-calls via het platform is toegestaan (Nick's zege,
+2026-07-11), ook met een cloud-model, MITS binnen de vaste account-limieten (kunnen opraken — spaarzaam,
+liefst kleine/goedkope modellen voor experimenten). Elke fase: implementeren + tests + waar zinvol één
+live-verificatie, dan pas door. Volgorde is bewust: eerst primitieven, dan refactor zonder gedragswijziging,
+dan pas nieuwe targets._
+
+**Betrokken bestanden (referentie):**
+- `src/services/providers/base.py` — `ChatProvider` (capability toevoegen).
+- `src/services/providers/claude_code_provider.py` — `is_cli_agent=True` + CLI-details (bestaat al: env,
+  gateway, `claude_code_model`, `chat_stream_events`, envelope-idee).
+- `src/services/providers/llm_router.py` — `chat_provider_and_model`, `chat_provider_type`,
+  `ask_orchestration_async`, `_dispatch_chat` (mode-probe).
+- `src/services/providers/registry_service.py` — `resolve_slot` (+ toewijzings-guard voor modaliteit).
+- `src/services/assistants/orchestration/pipeline_runner.py` (~968-1090) — chat option-A branch.
+- `src/services/assistants/claude_code_chat_agent.py` + `src/services/workflows/claude_code_operation_runner.py`
+  — bestaande runners → optillen naar base.
+- `src/services/system_cognition/{system_cognition_service,system_pipeline_runner,factory,dispatcher}.py`.
+- `src/services/web_search_service.py` — `_claude_code`.
+- FE: `lovely-landing-project/src/.../AIModelsSection.tsx` (routing/slots + modaliteit-guard).
+
+**Fase 0 — Primitieven (capability + modus + policy), geen gedragswijziging.**
+- `ChatProvider.is_cli_agent: bool = False`; in `ClaudeCodeChatProvider` op `True`. (Optioneel
+  `execution_mode`-property afgeleid hiervan; providers blijven verder gelijk.)
+- Router-helper `slot_mode(role) -> "agent" | "model" | None` (None = leeg slot = uit), o.b.v.
+  `resolve_slot` + `provider.is_cli_agent`.
+- `CAP_CLASS`-map: welke rollen **outsourceable** zijn (planner, cognition, memory_decision, auto_decision,
+  router, workflow, generators) vs **modality-only** (embeddings, transcription, realtime/live, image, tts).
+- Tests: unit voor `slot_mode` (leeg/model/agent) + CAP_CLASS. Nog geen call-site die 't gebruikt.
+- Acceptatie: bestaand gedrag 100% ongewijzigd; nieuwe helpers getest.
+
+**Fase 1 — Gedeelde `CliAgentRunner` base (refactor, gedrag-behoudend).**
+- Nieuw `src/services/providers/cli_agent_runner.py`: gemeenschappelijke logica uit de twee runners —
+  provider bouwen (via registry + `is_cli_agent`), gateway `--mcp-config` schrijven/opruimen, env,
+  spawnen, `run()`/`run_stream_events()`, `parse_envelope()` (til `_parse_envelope` hierheen).
+- Subclass-API: `build_instruction(ctx)`, `output_contract`, `parse_result(text)`. Per subsysteem
+  verschilt alleen dit.
+- Herschrijf `ClaudeCodeChatAgent` en `ClaudeCodeOperationRunner` als dunne subclasses. **Geen**
+  functionele wijziging.
+- Tests: bestaande claude_code/workflow-suite groen. Live: één chat-turn + één workflow-stap draaien.
+- Acceptatie: identiek gedrag chat + workflow; code ~gedeeld.
+
+**Fase 2 — Capability-based dispatch (verwijder `== "claude_code"`) + no-fallback + modaliteit-guard.**
+- pipeline_runner chat-branch: `if provider.is_cli_agent` i.p.v. `_cc_type == "claude_code"`.
+- web_search: `_claude_code` → generiek `_cli_agent` (elke `is_cli_agent`-provider met native web).
+- Workflow-engine-selectie afstemmen op de modus (engine "claude_code" → capability/`agent`), zodat een
+  toekomstige CLI-agent dezelfde engine-weg volgt.
+- **No-fallback afdwingen:** leeg slot = stap uit (generaliseer het bestaande `chat.memory_decision`
+  "unassigned = off"-patroon); geen stille terugval meer.
+- **Modaliteit-guard bij toewijzing:** `registry_service`/toewijs-endpoint weigert een `is_cli_agent`-
+  provider op een modality-only slot; FE (`AIModelsSection`) biedt 'm daar niet aan + toont per slot de
+  actieve modus (model/agent/uit) en het "waarom".
+- Tests: dispatch kiest agent o.b.v. capability; modaliteit-toewijzing geweigerd (unit + API).
+- Acceptatie: niets hangt meer aan de string `"claude_code"` in de dispatch-paden.
+
+**Fase 3 — Cognition als agent-target (de blackbox).** (detail-item hieronder)
+- `CognitionAgentRunner(CliAgentRunner)`: instructie = "beslis memory/belief/curiosity + retourneer
+  envelope"; contract `{decision, memories[], beliefs[], curiosity[]}`; mag via mcp__nd3x bestaande
+  memories opvragen om te dedupliceren.
+- `SystemCognitionService`/dispatcher: `slot_mode("cognition")` → agent ⇒ blackbox, model ⇒ bestaande
+  structured pijplijn, leeg ⇒ uit. Orchestrator schrijft de envelope weg via de bestaande repos.
+- Tests: envelope-parse + persist (mocked). Live (spaarzaam, klein model waar mogelijk): één turn agent-
+  cognition, verifieer dat memories/beliefs correct in de DB komen + in de volgende turn geïnjecteerd.
+- Acceptatie: met een CLI-agent op de cognition-slot ontstaan/injecteren memories betrouwbaar.
+
+**Fase 4 — Decision-slots als agent-modus (memory_decision / auto_decision / router).**
+- Kleine agent-instructie + envelope per slot; dispatch wanneer `slot_mode==agent`. Leeg=uit, model=huidige
+  structured call. (Let op kosten: subprocess per beslissing — daarom is "leeg=uit" belangrijk en zet je
+  alleen een agent als je dat écht wilt.)
+- Tests + één live per slot.
+
+**Fase 5 — Afronding: UI, docs, Codex-proof.**
+- FE routing-scherm: modus-badge per slot (model/agent/uit) + korte uitleg van het waarom.
+- Docs/README-sectie: model vs agent, no-fallback, capability-klassen, "hoe voeg ik een CLI-agent toe"
+  (= provider met `is_cli_agent` + `CliAgentRunner`-subclass). Optioneel: een dummy 2e CLI-agent-provider
+  als rooktest dat niets Claude-specifiek is blijven hangen.
+- Acceptatie: een tweede (hypothetische) CLI-agent zou zonder subsysteem-wijziging werken.
+
+**Risico's/aandachtspunten:** (1) refactor-fase 1 mag géén gedrag wijzigen — leun op de bestaande suite +
+live smoke. (2) envelope-parse moet tolerant blijven (`_parse_envelope` bestaat al). (3) modaliteit-guard
+ook server-side afdwingen, niet alleen FE. (4) experimenteer-budget bewaken (account-limieten).
+
+## Claude Code als "blackbox" cognition-pad (agent doet memory/belief-extractie zelf)
+_Aangedragen 2026-07-11 (Nick). Onderzoek gedaan; ontwerp, nog niet gebouwd._
+
+**Context/bevinding:** cognition draait nu via `openai_service.ask_orchestration_async(json_schema=…)`
+op de slots **chat.cognition** + **chat.memory_decision** — een structured-output pijplijn met
+meerdere LLM-calls per turn (turn-interpretatie → memory-write → belief → curiosity). De
+`claude_code`-provider heeft `supports_structured_output=False` en z'n `.chat()` **negeert
+response_format**, dus de json_schema wordt gedropt → geen enforcement → onbetrouwbare JSON.
+Cognition via de HUIDIGE pijplijn op claude_code werkt dus niet betrouwbaar (los van subprocess-
+latency per call).
+
+**Idee (Nick):** net als bij chat option-A — geef claude_code NIET de meerstaps-pijplijn, maar
+één **blackbox-instructie**: "hier is de turn (vraag + antwoord [+ trace]); beslis zelf of er iets
+onthouden moet worden (memory/belief/curiosity), zo ja extraheer het in DEZE JSON-vorm en geef
+het terug." Opus is sterk genoeg om die beslissing + extractie in één agentische pass te doen. De
+orchestrator persisteert het resultaat alleen nog (DB) voor injectie in een volgende turn.
+
+**Waarom dit past:**
+- Zelfde patroon als de workflow-`_HANDOFF_INSTRUCTION`/envelope: agentic run eindigt met één
+  JSON-envelope; tolerant parsen (geen schema-enforcement nodig). Dat werkt al.
+- MINDER calls dan de huidige pijplijn (1 agentische pass i.p.v. meerdere), dus subprocess-latency
+  valt mee.
+- Bonus: de agent kan via de mcp__nd3x-gateway bestaande memories opvragen om te dedupliceren —
+  een echt voordeel t.o.v. de huidige stateless pijplijn.
+
+**Ontwerp-schets:**
+- Per-provider split (zoals option-A voor chat): als de cognition-slot → claude_code, gebruik het
+  blackbox-cognition-pad; anders de bestaande structured pijplijn.
+- Output-contract = een gedefinieerde envelope `{memories:[…], beliefs:[…], curiosity:[…], decision:…}`
+  die de orchestrator in de bestaande repos (MemoryRepository/BeliefRepository/…) wegschrijft.
+- Hergebruik de envelope-parser uit `claude_code_operation_runner._parse_envelope`.
+- Draait als achtergrond-taak (dispatcher), net als nu — alleen de "brain" verandert.
+Aandachtspunten: de instructie moet de memory/belief-criteria bevatten (wat de router nu doet:
+"durable preference/rule/decision" vs "volatile lookup"); dedupe tegen bestaande memories; kosten.
+
+## Skills-overzicht: skills met niet-bestaande tools ook selecteerbaar maken
+_Aangedragen 2026-07-11._
+In het skills-overzicht wil Nick ook skills kunnen **selecteren** die één of meer tools hebben
+die niet meer bestaan (nu blijkbaar geblokkeerd/uitgegrijsd). Onderzoek: waar wordt selecteerbaarheid
+bepaald (FE skills-overzicht + BE skill-validatie, bv. `_assert_skill_file_list_allowed` /
+skill_tool-relaties)? Toestaan dat een skill met ontbrekende tools tóch selecteerbaar is —
+ontbrekende tools netjes negeren/markeren i.p.v. de hele skill blokkeren (graceful degradation).
+Denk aan: skill-tool-koppelingen naar verwijderde `Tool`-rows, FE-disabled-state, en of de
+orchestrator/agent robuust omgaat met een geselecteerde skill waarvan een tool weg is.

@@ -25,19 +25,20 @@ from component.logging import get_logger
 
 log = get_logger(__name__)
 
-_AGENT_INSTRUCTION = (
-    "You are the ND3X assistant, operating as an autonomous agent. Use the "
-    "available tools to accomplish the user's request, then reply in natural "
-    "language.\n\n"
-    "ND3X's own capabilities — documents, the agent board, shell, and connected "
-    "MCP servers (e.g. Fabric) and skills — are exposed as tools prefixed "
-    "`mcp__nd3x__`. Prefer those for anything involving ND3X data, the user's "
-    "connected services, or ND3X skills; use your own built-in tools (web "
-    "search, file editing) for general work. Chain tool calls as needed to reach "
-    "a complete answer, exactly as a normal agent would.\n\n"
-    "Do not ask the user to approve tool runs — just do the work with the tools "
-    "you have. When done, give a clear, direct answer."
-)
+def _agent_instruction() -> str:
+    """Chat-turn instruction: the shared ND3X world-context + the chat tail.
+
+    Built from ND3X_AGENT_PREAMBLE so the world-context (what ND3X is, that
+    capabilities live under mcp__nd3x, the host-boundary, reply-language) can
+    never drift from the workflow runner's — only the trailing role rule differs.
+    """
+    from services.providers.claude_code_provider import ND3X_AGENT_PREAMBLE
+    return (
+        ND3X_AGENT_PREAMBLE + "\n\n"
+        "You are answering a chat turn. When you have done the work, give the "
+        "user a clear, direct answer in natural language — that final message is "
+        "what ND3X shows in the chat."
+    )
 
 
 class ClaudeCodeChatAgent:
@@ -135,7 +136,7 @@ class ClaudeCodeChatAgent:
         cc_model = claude_code_model(model)
         mcp_config_path = self._write_gateway_config()
         provider = self._build_provider(cc_model, mcp_config_path)
-        instructions = _AGENT_INSTRUCTION
+        instructions = _agent_instruction()
         skills_block = self._skill_instructions_block(skill_names)
         if skills_block:
             instructions = f"{instructions}\n\n{skills_block}"

@@ -70,6 +70,13 @@ NON_AGENTIC_MAX_TURNS = 4
 # nothing, so every real (and future) CLI tool is blocked — robustly.
 _NO_TOOLS_SENTINEL = "__nd3x_no_tools__"
 
+# StreamReader buffer for the CLI's stdout. The CLI emits one JSON object PER LINE
+# in stream-json mode, and a single line can carry a large tool result (e.g. a
+# Fabric onelake_list_* payload) inlined in the assistant/tool event. asyncio's
+# default readline limit is 64 KB — a bigger line raises "Separator is not found,
+# and chunk exceed the limit". 64 MB gives ample headroom for big tool outputs.
+_STDOUT_LIMIT = 64 * 1024 * 1024
+
 # The no-tools instruction. In ND3X, Claude Code in plain-chat is the PLANNING
 # BRAIN, not the executor: it must produce the planning output the ND3X prompt
 # asks for (often a JSON plan with tool_id calls) as plain text — ND3X runs any
@@ -82,6 +89,32 @@ NON_AGENTIC_INSTRUCTION = (
     "cannot call tools yourself — the ND3X system executes any tools or tool_id "
     "calls contained in your output. Never attempt to invoke a tool directly; "
     "your own tools are disabled. Just return the requested planning text/JSON."
+)
+
+# Shared world-context for every AGENTIC Claude Code run (chat turn or workflow
+# step). It answers the three questions a fresh CLI process cannot infer on its
+# own: what ND3X is, where its capabilities live, and the language to reply in.
+# Both the chat agent (ClaudeCodeChatAgent) and the workflow runner
+# (ClaudeCodeOperationRunner) prepend this, then add their own tail (chat: give
+# a direct answer; workflow: end with the handoff envelope). Keep role-specific
+# rules OUT of here — this is only the common ground both roles share, so a fix
+# to the shared context can't land in one role and be missed in the other.
+ND3X_AGENT_PREAMBLE = (
+    "You are the ND3X assistant, running as an autonomous agent inside the ND3X "
+    "self-hosted AI platform.\n\n"
+    "ND3X's own capabilities — connected MCP servers (e.g. Fabric), the agent "
+    "board, ND3X skills, documents and shell — are exposed to you as tools "
+    "prefixed `mcp__nd3x__`. Prefer those for anything involving ND3X data, the "
+    "user's connected services, or ND3X skills; use your own built-in tools (web "
+    "search, file editing) only for general work with no ND3X equivalent. Do not "
+    "use your own Skill/Task/Cron/schedule tools for this — ND3X skills and "
+    "scheduling ARE the `mcp__nd3x__` tools.\n\n"
+    "Scheduling, night-runs, workflows and deployments are ND3X concepts managed "
+    "through the `mcp__nd3x__` tools and the agent board — NOT the host operating "
+    "system's crontab or shell. Never reach for the host OS to change them.\n\n"
+    "Chain tool calls as needed to reach a complete result, and never ask the "
+    "user to approve a tool run — just do the work with the tools you have. "
+    "Answer in the same language the user used."
 )
 
 
@@ -266,6 +299,7 @@ class ClaudeCodeChatProvider(ChatProvider):
                 stderr=asyncio.subprocess.PIPE,
                 env=self._build_env(),
                 cwd=self._workdir,
+                limit=_STDOUT_LIMIT,  # big stream-json lines (inlined tool results)
             )
         except FileNotFoundError as exc:
             raise RuntimeError(
