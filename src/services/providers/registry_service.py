@@ -214,6 +214,21 @@ class ProviderRegistryService:
         from services.providers.capability_router import ALL_SLOTS
         if slot not in ALL_SLOTS:
             raise ValueError(f"Unknown routing slot '{slot}'. Valid slots: {', '.join(ALL_SLOTS)}")
+        # No-fallback rule + modality guard: a CLI-agent provider runs its own agent
+        # loop and has no interface for modality/realtime work (TTS/STT/live/
+        # embeddings/image). Reject it at ASSIGNMENT time rather than silently
+        # substituting another model at runtime.
+        if provider_model_id is not None:
+            from services.providers.execution_mode import MODALITY, capability_class, is_cli_agent_type
+            if capability_class(slot) == MODALITY:
+                from models.provider import ProviderModel
+                pm_row = self.db.query(ProviderModel).filter(ProviderModel.id == provider_model_id).first()
+                ptype = (pm_row.provider.provider_type if pm_row and pm_row.provider else None)
+                if is_cli_agent_type(ptype):
+                    raise ValueError(
+                        f"A CLI-agent provider (e.g. Claude Code) cannot be assigned to the "
+                        f"modality slot '{slot}': TTS/STT/live/embeddings/image run in the "
+                        f"orchestrator only. Assign a normal model provider here.")
         obj = self.db.query(CapabilityAssignment).filter(CapabilityAssignment.slot == slot).first()
         if obj is None:
             obj = CapabilityAssignment(slot=slot, provider_model_id=provider_model_id)

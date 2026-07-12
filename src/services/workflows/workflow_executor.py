@@ -3407,12 +3407,13 @@ class WorkflowExecutor:
                 shared_session_id = resolved_thread.strip()
 
         # Per-operation execution engine. Default "orchestrator" = the ND3X agent
-        # loop with ND3X tools (below). "claude_code" runs the step as one
-        # autonomous Claude Code CLI task, fully outside the orchestrator; it
+        # loop with ND3X tools (below). "agent" (alias "claude_code") runs the step
+        # as one autonomous CLI-agent task, fully outside the orchestrator; it
         # returns a pipeline-shaped result so all handling below is unchanged.
         _exec_cfg = config.get("execution") if isinstance(config.get("execution"), dict) else {}
         _engine = str(_exec_cfg.get("engine") or "orchestrator").strip().lower()
-        if _engine == "claude_code" and self.claude_code_runner is not None:
+        _is_agent_engine = _engine in ("agent", "claude_code")
+        if _is_agent_engine and self.claude_code_runner is not None:
             log.infox(
                 "Assistant workflow operation draait op de claude_code engine",
                 workflow_run_id=context.get("workflow_run_id"),
@@ -3429,11 +3430,11 @@ class WorkflowExecutor:
                 workflow_run_id=context["workflow_run_id"],
                 operation_id=operation.id,
             )
-        elif _engine == "claude_code":
+        elif _is_agent_engine:
             raise RuntimeError(
-                "Operation is set to the 'claude_code' engine, but no Claude Code "
-                "provider is available. Add and enable it under AI Models, or "
-                "switch this step back to the orchestrator engine.")
+                "Operation is set to the 'agent' (claude_code) engine, but no "
+                "CLI-agent provider is available. Add and enable one under AI "
+                "Models, or switch this step back to the orchestrator engine.")
         else:
             result = await self.assistant_runner.run(
                 assistant_id=operation.operation_ref_id,

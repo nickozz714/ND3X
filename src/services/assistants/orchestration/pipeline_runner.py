@@ -981,7 +981,10 @@ class AssistantPipelineRunner:
                 _cc_type, _cc_model = _cc_probe(model, planner_role)
         except Exception:  # noqa: BLE001
             _cc_type = None
-        if _cc_type == "claude_code":
+        # Capability-based, not a provider_type string: any CLI-agent provider
+        # (Claude Code now, Codex later) runs the chat turn in agent mode.
+        from services.providers.execution_mode import is_cli_agent_type
+        if is_cli_agent_type(_cc_type):
             from db.database import SessionLocal
             from services.assistants.claude_code_chat_agent import ClaudeCodeChatAgent
             # Give the agent the CLEAN conversation (history + the question), NOT

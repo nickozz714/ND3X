@@ -122,3 +122,25 @@ def test_slot_mode_disabled_provider_is_none(db):
     reg, p, m = _register(db, provider_type="claude_code", model_id="opus", enabled=False)
     reg.set_assignment("chat.planner", m.id)
     assert slot_mode(db, "chat.planner") is None
+
+
+# ── Fase 2: modality guard at assignment (no fallback) ───────────────────────
+
+def test_cli_agent_rejected_on_modality_slots(db):
+    reg, _p, m = _register(db, provider_type="claude_code", model_id="opus")
+    for slot in ("embeddings", "transcription", "tts", "voice", "realtime", "image_generation"):
+        with pytest.raises(ValueError, match="modality slot"):
+            reg.set_assignment(slot, m.id)
+
+
+def test_cli_agent_allowed_on_outsourceable_slots(db):
+    reg, _p, m = _register(db, provider_type="claude_code", model_id="opus")
+    # No exception — an outsourceable slot accepts a CLI-agent (agent mode).
+    reg.set_assignment("chat.planner", m.id)
+    assert slot_mode(db, "chat.planner") == "agent"
+
+
+def test_plain_model_still_allowed_on_modality_slots(db):
+    # The guard only rejects CLI-agent providers; normal models are unaffected.
+    reg, _p, m = _register(db, provider_type="ollama", model_id="nomic-embed")
+    reg.set_assignment("embeddings", m.id)  # must not raise

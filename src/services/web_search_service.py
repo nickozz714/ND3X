@@ -45,9 +45,10 @@ def search(db: Session, query: str, *, max_results: int = 5) -> Dict[str, Any]:
 
     ptype = (resolved.provider_type or "").lower()
     key = reg.get_api_key(resolved.provider_id)
-    # claude_code needs no API key — it searches via the local CLI on the
-    # subscription (host login or stored setup-token).
-    if not key and ptype != "claude_code":
+    # A CLI-agent provider (Claude Code, …) needs no API key — it searches via the
+    # local CLI on the subscription (host login or stored setup-token).
+    from services.providers.execution_mode import is_cli_agent_type
+    if not key and not is_cli_agent_type(ptype):
         return {"ok": False, "error": f"No API key configured for the web-search provider ({resolved.provider_type})."}
 
     model = resolved.model_id
@@ -58,7 +59,7 @@ def search(db: Session, query: str, *, max_results: int = 5) -> Dict[str, Any]:
             return _anthropic(key, model, query, max_results)
         if ptype in ("gemini", "google", "google_genai"):
             return _gemini(key, model, query)
-        if ptype == "claude_code":
+        if is_cli_agent_type(ptype):
             return _claude_code(db, resolved.provider_id, key, model, query, max_results)
     except Exception as exc:  # noqa: BLE001 — surface a clean error to the agent
         log.warningx("web search mislukt", provider=ptype, error=str(exc))
