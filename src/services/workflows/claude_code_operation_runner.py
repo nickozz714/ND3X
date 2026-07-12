@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from component.logging import get_logger
+from services.providers.cli_agent_runner import CliAgentRunner
 from services.providers.registry_service import ProviderRegistryService
 
 log = get_logger(__name__)
@@ -67,29 +68,18 @@ _HANDOFF_TAIL = (
 )
 
 
-class ClaudeCodeOperationRunner:
-    """Runs one workflow activity as an autonomous Claude Code CLI task."""
-
-    def __init__(self, db: Session):
-        self.db = db
+class ClaudeCodeOperationRunner(CliAgentRunner):
+    """Runs one workflow activity as an autonomous CLI-agent task."""
 
     def provider_available(self) -> bool:
-        """True when an enabled claude_code provider is registered (so the
-        executor can fall back to the orchestrator engine with a clear error
-        rather than crashing when the engine is requested but unconfigured)."""
-        return self._resolve_provider() is not None
-
-    def _resolve_provider(self):
-        reg = ProviderRegistryService(self.db)
-        from models.provider import Provider
-        return (self.db.query(Provider)
-                .filter(Provider.provider_type == "claude_code", Provider.enabled == True)  # noqa: E712
-                .order_by(Provider.id.asc())
-                .first())
+        """True when an enabled CLI-agent provider is registered (so the executor
+        can fall back to the orchestrator engine with a clear error rather than
+        crashing when the engine is requested but unconfigured)."""
+        return self.cli_agent_available()
 
     def _build_provider(self, operation_config: Dict[str, Any], model: Optional[str],
                         *, mcp_config_path: Optional[str] = None):
-        p = self._resolve_provider()
+        p = self._resolve_cli_provider_row()
         if p is None:
             raise RuntimeError(
                 "The 'claude_code' execution engine was selected but no enabled "
@@ -135,22 +125,6 @@ class ClaudeCodeOperationRunner:
         exec_cfg = operation_config.get("execution") if isinstance(operation_config.get("execution"), dict) else {}
         return bool(exec_cfg.get("nd3x_tools", True))
 
-    @staticmethod
-    def _write_gateway_config() -> Optional[str]:
-        """Write the ND3X MCP gateway --mcp-config to a temp file for the CLI."""
-        try:
-            import tempfile
-            from services.mcp.mcp_gateway import mcp_config_for_cli
-            cfg = mcp_config_for_cli()
-            fd, path = tempfile.mkstemp(prefix="nd3x-mcp-", suffix=".json")
-            with os.fdopen(fd, "w") as f:
-                json.dump(cfg, f)
-            return path
-        except Exception as exc:  # noqa: BLE001 — the run can still proceed without ND3X tools
-            log.warningx("ND3X MCP gateway config schrijven mislukt — stap draait zonder ND3X-tools",
-                         error=str(exc))
-            return None
-
     async def run(
         self,
         *,
@@ -166,7 +140,7 @@ class ClaudeCodeOperationRunner:
         # CLI loads; removed after the run.
         mcp_config_path: Optional[str] = None
         if self._want_nd3x_tools(operation_config or {}):
-            mcp_config_path = self._write_gateway_config()
+            mcp_config_path = self.write_gateway_config()
 
         provider = self._build_provider(operation_config or {}, model, mcp_config_path=mcp_config_path)
         prompt = self._build_prompt(question, run_transcript)
@@ -247,7 +221,7 @@ class ClaudeCodeOperationRunner:
         found — an autonomous run that produced prose still shouldn't hard-fail.
         """
         text = (text or "").strip()
-        obj = ClaudeCodeOperationRunner._last_json_object(text)
+        obj = CliAgentRunner.last_json_object(text)
         if isinstance(obj, dict) and ("answer" in obj or "downstream_handoff" in obj):
             answer = str(obj.get("answer") or "")
             handoff = obj.get("downstream_handoff")
@@ -260,27 +234,3 @@ class ClaudeCodeOperationRunner:
             "artifacts": [], "facts": {}, "iterables": {}, "open_questions": [],
             "status": "success",
         }
-
-    @staticmethod
-    def _last_json_object(text: str) -> Any:
-        # Try whole-string first, then the last {...} span (handles trailing/leading prose).
-        try:
-            return json.loads(text)
-        except Exception:  # noqa: BLE001
-            pass
-        depth = 0
-        end = -1
-        for i in range(len(text) - 1, -1, -1):
-            c = text[i]
-            if c == "}":
-                if depth == 0:
-                    end = i
-                depth += 1
-            elif c == "{":
-                depth -= 1
-                if depth == 0 and end != -1:
-                    try:
-                        return json.loads(text[i:end + 1])
-                    except Exception:  # noqa: BLE001
-                        end = -1
-        return None

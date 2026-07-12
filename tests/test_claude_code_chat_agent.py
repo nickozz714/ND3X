@@ -71,8 +71,8 @@ def test_run_is_agentic_with_gateway(monkeypatch, db):
 
     import services.providers.claude_code_provider as ccp
     monkeypatch.setattr(ccp.ClaudeCodeChatProvider, "chat", fake_chat)
-    monkeypatch.setattr(ClaudeCodeChatAgent, "_write_gateway_config",
-                        staticmethod(lambda: "/tmp/fake-chat-mcp.json"))
+    monkeypatch.setattr(ClaudeCodeChatAgent, "write_gateway_config",
+                        staticmethod(lambda *a, **k: "/tmp/fake-chat-mcp.json"))
     monkeypatch.setattr(cca.os, "unlink", lambda p: None)
 
     answer = asyncio.run(ClaudeCodeChatAgent(db).run(user_input="lijst mijn Fabric workspaces"))
@@ -96,7 +96,7 @@ def test_run_includes_selected_skill_instructions(monkeypatch, db):
 
     import services.providers.claude_code_provider as ccp
     monkeypatch.setattr(ccp.ClaudeCodeChatProvider, "chat", fake_chat)
-    monkeypatch.setattr(ClaudeCodeChatAgent, "_write_gateway_config", staticmethod(lambda: None))
+    monkeypatch.setattr(ClaudeCodeChatAgent, "write_gateway_config", staticmethod(lambda *a, **k: None))
 
     asyncio.run(ClaudeCodeChatAgent(db).run(user_input="q", skill_names=["fabric_query"]))
     instr = capture["instructions"]
@@ -114,7 +114,7 @@ def test_run_stream_events_separates_thinking_from_answer(monkeypatch, db):
 
     import services.providers.claude_code_provider as ccp
     monkeypatch.setattr(ccp.ClaudeCodeChatProvider, "chat_stream_events", fake_events)
-    monkeypatch.setattr(ClaudeCodeChatAgent, "_write_gateway_config", staticmethod(lambda: None))
+    monkeypatch.setattr(ClaudeCodeChatAgent, "write_gateway_config", staticmethod(lambda *a, **k: None))
 
     async def collect():
         return [ev async for ev in ClaudeCodeChatAgent(db).run_stream_events(user_input="q")]

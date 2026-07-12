@@ -134,8 +134,8 @@ def test_run_wires_nd3x_gateway_by_default(monkeypatch, db):
 
     # Stub the gateway config write (no real temp file) — the run should thread
     # the returned path into the CLI as --mcp-config, then clean it up.
-    monkeypatch.setattr(ClaudeCodeOperationRunner, "_write_gateway_config",
-                        staticmethod(lambda: "/tmp/fake-mcp.json"))
+    monkeypatch.setattr(ClaudeCodeOperationRunner, "write_gateway_config",
+                        staticmethod(lambda *a, **k: "/tmp/fake-mcp.json"))
     import services.workflows.claude_code_operation_runner as ccr
     monkeypatch.setattr(ccr.os, "unlink", lambda p: None)
 
@@ -148,8 +148,8 @@ def test_run_can_opt_out_of_nd3x_tools(monkeypatch, db):
     _add_provider(db)
     capture: dict = {}
     _stub_chat(monkeypatch, json.dumps({"answer": "ok", "downstream_handoff": {"summary": "s", "status": "success"}}), capture)
-    monkeypatch.setattr(ClaudeCodeOperationRunner, "_write_gateway_config",
-                        staticmethod(lambda: (_ for _ in ()).throw(AssertionError("should not be called"))))
+    monkeypatch.setattr(ClaudeCodeOperationRunner, "write_gateway_config",
+                        staticmethod(lambda *a, **k: (_ for _ in ()).throw(AssertionError("should not be called"))))
     asyncio.run(ClaudeCodeOperationRunner(db).run(
         question="q", operation_config={"execution": {"nd3x_tools": False}}))
     assert "--mcp-config" not in (capture.get("extra_args") or [])
@@ -179,7 +179,7 @@ def test_run_without_provider_raises(db):
 
 
 def test_last_json_object_scans_from_end():
-    fn = ClaudeCodeOperationRunner._last_json_object
+    fn = ClaudeCodeOperationRunner.last_json_object
     assert fn('prefix {"a": 1} middle {"b": 2}')["b"] == 2
     assert fn('{"a": {"nested": true}}')["a"]["nested"] is True
     assert fn("no json here") is None

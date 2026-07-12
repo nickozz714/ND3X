@@ -22,6 +22,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from component.logging import get_logger
+from services.providers.cli_agent_runner import CliAgentRunner
 
 log = get_logger(__name__)
 
@@ -41,27 +42,17 @@ def _agent_instruction() -> str:
     )
 
 
-class ClaudeCodeChatAgent:
+class ClaudeCodeChatAgent(CliAgentRunner):
     """Runs one chat turn as an autonomous Claude Code agent with ND3X tools."""
 
-    def __init__(self, db: Session):
-        self.db = db
-
-    def _resolve_provider_row(self):
-        from models.provider import Provider
-        return (self.db.query(Provider)
-                .filter(Provider.provider_type == "claude_code", Provider.enabled == True)  # noqa: E712
-                .order_by(Provider.id.asc())
-                .first())
-
     def available(self) -> bool:
-        return self._resolve_provider_row() is not None
+        return self.cli_agent_available()
 
     def _build_provider(self, model: Optional[str], mcp_config_path: Optional[str]):
         from services.providers.registry_service import ProviderRegistryService
         from services.providers.claude_code_provider import ClaudeCodeChatProvider
 
-        p = self._resolve_provider_row()
+        p = self._resolve_cli_provider_row()
         if p is None:
             raise RuntimeError("No enabled Claude Code provider is registered.")
         key = ProviderRegistryService(self.db).get_api_key(p.id)
@@ -86,19 +77,6 @@ class ClaudeCodeChatAgent:
             timeout=cfg.get("timeout"),
             extra_args=extra_args,
         )
-
-    @staticmethod
-    def _write_gateway_config() -> Optional[str]:
-        try:
-            import tempfile
-            from services.mcp.mcp_gateway import mcp_config_for_cli
-            fd, path = tempfile.mkstemp(prefix="nd3x-mcp-chat-", suffix=".json")
-            with os.fdopen(fd, "w") as f:
-                json.dump(mcp_config_for_cli(), f)
-            return path
-        except Exception as exc:  # noqa: BLE001 — proceed without ND3X tools
-            log.warningx("MCP gateway config voor chat schrijven mislukt", error=str(exc))
-            return None
 
     @staticmethod
     def _to_prompt(user_input: Any) -> str:
@@ -134,7 +112,7 @@ class ClaudeCodeChatAgent:
         Claude-coerced model to use (a non-Claude pin can't run in the CLI)."""
         from services.providers.claude_code_provider import claude_code_model
         cc_model = claude_code_model(model)
-        mcp_config_path = self._write_gateway_config()
+        mcp_config_path = self.write_gateway_config("nd3x-mcp-chat-")
         provider = self._build_provider(cc_model, mcp_config_path)
         instructions = _agent_instruction()
         skills_block = self._skill_instructions_block(skill_names)
