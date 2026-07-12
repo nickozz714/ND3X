@@ -195,15 +195,26 @@ class ProviderRegistryService:
         return True
 
     # ── Capability assignments ───────────────────────────────────────────────
+    @staticmethod
+    def _execution_mode(provider_type: Optional[str], assigned: bool) -> Optional[str]:
+        """'agent' for a CLI-agent provider, 'model' for a plain one, None when the
+        slot is unassigned (step off — the no-fallback rule). For the UI badge."""
+        if not assigned:
+            return None
+        from services.providers.execution_mode import is_cli_agent_type
+        return "agent" if is_cli_agent_type(provider_type) else "model"
+
     def list_assignments(self) -> List[CapabilityAssignmentRead]:
         out: List[CapabilityAssignmentRead] = []
         for a in self.db.query(CapabilityAssignment).order_by(CapabilityAssignment.slot).all():
             pm = a.provider_model
+            ptype = (pm.provider.provider_type if pm and pm.provider else None)
             out.append(CapabilityAssignmentRead(
                 slot=a.slot,
                 provider_model_id=a.provider_model_id,
-                provider_type=(pm.provider.provider_type if pm and pm.provider else None),
+                provider_type=ptype,
                 model_id=(pm.model_id if pm else None),
+                execution_mode=self._execution_mode(ptype, a.provider_model_id is not None),
             ))
         return out
 
@@ -238,11 +249,13 @@ class ProviderRegistryService:
         self.db.commit()
         self.db.refresh(obj)
         pm = obj.provider_model
+        ptype = (pm.provider.provider_type if pm and pm.provider else None)
         return CapabilityAssignmentRead(
             slot=obj.slot,
             provider_model_id=obj.provider_model_id,
-            provider_type=(pm.provider.provider_type if pm and pm.provider else None),
+            provider_type=ptype,
             model_id=(pm.model_id if pm else None),
+            execution_mode=self._execution_mode(ptype, obj.provider_model_id is not None),
         )
 
     def model_needs_extra_guidance(self, model_id: Optional[str]) -> bool:

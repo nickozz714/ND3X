@@ -103,6 +103,10 @@ class CapabilityAssignmentRead(BaseModel):
     # convenience denormalized fields for the UI
     provider_type: Optional[str] = None
     model_id: Optional[str] = None
+    # execution mode for this slot: "agent" (CLI-agent provider — runs its own loop),
+    # "model" (orchestrator-driven), or None (unassigned = the step is off). Lets the
+    # routing UI show a per-slot mode badge.
+    execution_mode: Optional[str] = None
 
 
 class CapabilityAssignmentSet(BaseModel):

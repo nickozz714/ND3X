@@ -144,3 +144,24 @@ def test_plain_model_still_allowed_on_modality_slots(db):
     # The guard only rejects CLI-agent providers; normal models are unaffected.
     reg, _p, m = _register(db, provider_type="ollama", model_id="nomic-embed")
     reg.set_assignment("embeddings", m.id)  # must not raise
+
+
+# ── Fase 5: provider-agnostic (Codex-ready) smoke ────────────────────────────
+
+def test_capability_path_is_provider_agnostic():
+    """A hypothetical 2nd CLI agent (e.g. Codex) is recognized purely by the
+    is_cli_agent capability — no provider_type name check anywhere. Defining the
+    ChatProvider subclass auto-registers it on the type registry."""
+    from services.providers.base import ChatProvider, ChatResult
+
+    class _CodexProvider(ChatProvider):
+        provider_type = "codex_cli_test"
+        is_cli_agent = True
+
+        async def chat(self, *a, **k):  # pragma: no cover - not called
+            return ChatResult(text="", provider=self.provider_type, model="x")
+
+    assert is_cli_agent_type("codex_cli_test") is True
+    assert ProviderRegistryService._execution_mode("codex_cli_test", True) == "agent"
+    assert ProviderRegistryService._execution_mode("ollama", True) == "model"
+    assert ProviderRegistryService._execution_mode("codex_cli_test", False) is None
