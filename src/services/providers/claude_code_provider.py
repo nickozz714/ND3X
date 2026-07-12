@@ -191,6 +191,9 @@ class ClaudeCodeChatProvider(ChatProvider):
     # non-schema path for providers with this off.
     supports_structured_output = False
     supports_streaming = True
+    # CLI agent: on a slot this provider runs in "agent" execution mode — its
+    # own agent loop with its own tools, result via an output contract.
+    is_cli_agent = True
 
     def __init__(
         self,

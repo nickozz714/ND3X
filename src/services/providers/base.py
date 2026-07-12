@@ -43,6 +43,36 @@ class ChatProvider(abc.ABC):
     #: set this True; the router only streams via providers that support it (else it falls
     #: back to a single non-streaming call).
     supports_streaming: bool = False
+    #: True for CLI-agent providers (Claude Code; later Codex, ...): the provider
+    #: runs its OWN agent loop with its own tools ("agent" execution mode) and
+    #: returns a result via an output contract — it cannot enforce structured
+    #: output. False = a plain model the orchestrator drives through its own
+    #: multi-step logic ("model" execution mode). Subsystems must branch on this
+    #: capability, never on the provider_type string.
+    is_cli_agent: bool = False
+
+    #: registry of concrete provider classes by provider_type, so capability
+    #: lookups by type string (e.g. execution_mode.is_cli_agent_type) don't need
+    #: a provider instance. Populated automatically on subclass definition.
+    _type_registry: Dict[str, type] = {}
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        ptype = getattr(cls, "provider_type", None)
+        if ptype and ptype != "base":
+            ChatProvider._type_registry[ptype] = cls
+
+    @classmethod
+    def class_for_type(cls, provider_type: Optional[str]) -> Optional[type]:
+        """The registered ChatProvider subclass for a provider_type string, or
+        None when that provider module hasn't been imported/registered."""
+        return cls._type_registry.get((provider_type or "").strip())
+
+    @property
+    def execution_mode(self) -> str:
+        """'agent' when this provider runs its own agent loop (CLI agent),
+        'model' when the orchestrator drives it as a plain LLM."""
+        return "agent" if self.is_cli_agent else "model"
 
     @abc.abstractmethod
     async def chat(
