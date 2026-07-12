@@ -115,6 +115,12 @@ class ClaudeCodeChatAgent(CliAgentRunner):
         mcp_config_path = self.write_gateway_config("nd3x-mcp-chat-")
         provider = self._build_provider(cc_model, mcp_config_path)
         instructions = _agent_instruction()
+        # Dynamic ND3X inventory (connected MCP servers, skill catalog, selected
+        # skills' file roots) — keeps the static preamble current from the DB.
+        from services.providers.nd3x_agent_context import build_nd3x_context_block
+        nd3x_ctx = build_nd3x_context_block(self.db, selected_skill_names=skill_names)
+        if nd3x_ctx:
+            instructions = f"{instructions}\n\n{nd3x_ctx}"
         skills_block = self._skill_instructions_block(skill_names)
         if skills_block:
             instructions = f"{instructions}\n\n{skills_block}"

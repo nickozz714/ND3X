@@ -156,8 +156,16 @@ class ClaudeCodeOperationRunner(CliAgentRunner):
             workflow_run_id=workflow_run_id, operation_id=operation_id,
             question_length=len(question or ""), nd3x_tools=mcp_config_path is not None,
         )
+        _instructions = _handoff_instruction()
+        # Dynamic ND3X inventory (connected MCP servers, skill catalog) so the step
+        # knows which capabilities are live — only when it has the ND3X gateway.
+        if mcp_config_path:
+            from services.providers.nd3x_agent_context import build_nd3x_context_block
+            _ctx = build_nd3x_context_block(self.db)
+            if _ctx:
+                _instructions = f"{_instructions}\n\n{_ctx}"
         try:
-            result = await provider.chat(prompt, instructions=_handoff_instruction())
+            result = await provider.chat(prompt, instructions=_instructions)
         finally:
             if mcp_config_path:
                 try:
