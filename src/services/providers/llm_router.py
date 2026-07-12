@@ -220,6 +220,21 @@ class LLMRouter:
                 }}
             else:
                 kwargs = {**kwargs, "response_format": {"type": "json_object"}}
+        elif (
+            not (role or "").startswith("writer:")
+            and json_schema
+            and getattr(provider, "is_cli_agent", False)
+        ):
+            # Fase 4 — decision/generator slots on a CLI-agent provider. A CLI agent
+            # can't enforce response_format, so instead of silently dropping the
+            # schema we put it IN the prompt and rely on tolerant JSON parsing. This
+            # gives memory_decision/auto_decision/wizards a real agent mode (no
+            # fallback to another model).
+            import json as _json
+            _schema_directive = (
+                "\n\nReturn ONLY a single JSON object matching this schema — no prose, "
+                "no markdown fences:\n" + _json.dumps(json_schema))
+            kwargs = {**kwargs, "instructions": (kwargs.get("instructions") or "") + _schema_directive}
         rf = kwargs.get("response_format") or {}
         log.infox("LLMRouter chat naar alternatieve provider", role=role,
                   requested_model=model, effective_model=eff_model or model,
