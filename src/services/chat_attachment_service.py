@@ -451,7 +451,10 @@ class ChatAttachmentService:
                     store=False,
                 )
                 description = getattr(result, "text", "") or ""
-                sections.append("### Attached image analysis\n" + description)
+                # Name the analyzed images so later hops can reference them
+                # (image__view takes an attachment name/id).
+                image_names = ", ".join(str(r["name"]) for r in images)
+                sections.append(f"### Attached image analysis ({image_names})\n" + description)
                 vector = None
                 try:
                     vector = await asyncio.to_thread(llm_service.embed, description)

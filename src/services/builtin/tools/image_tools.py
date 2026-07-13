@@ -53,21 +53,37 @@ def _downscaled(path: Path, media_type: str, *, max_px: int = 1280) -> tuple[byt
         return path.read_bytes(), media_type
 
 
-def _find_image_record(thread_id: str, ref: str) -> Dict[str, Any] | None:
-    """Find an image attachment by id or (case-insensitive) name for a thread."""
-    ref_l = (ref or "").strip().lower()
+def _list_image_records(thread_id: str) -> list[Dict[str, Any]]:
+    """All image attachment records for a thread, manifest order."""
     directory = _thread_dir(thread_id)
     if not directory.is_dir():
-        return None
+        return []
+    records: list[Dict[str, Any]] = []
     for manifest in sorted(directory.glob("*.json")):
         try:
             record = json.loads(manifest.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001 — skip garbled manifests
             continue
-        if not str(record.get("media_type") or "").startswith("image/"):
-            continue
+        if str(record.get("media_type") or "").startswith("image/"):
+            records.append(record)
+    return records
+
+
+def _find_image_record(thread_id: str, ref: str) -> Dict[str, Any] | None:
+    """Find an image attachment by id or (case-insensitive) name for a thread.
+
+    Smaller planner models sometimes pass a made-up reference (e.g. a
+    ``${...}`` placeholder) instead of the attachment name. When the thread
+    holds exactly one image, an unmatched ref falls back to that image —
+    'the image' is unambiguous there.
+    """
+    ref_l = (ref or "").strip().lower()
+    records = _list_image_records(thread_id)
+    for record in records:
         if record.get("id") == ref or str(record.get("name") or "").lower() == ref_l:
             return record
+    if len(records) == 1:
+        return records[0]
     return None
 
 
@@ -202,7 +218,9 @@ async def image_view(args: Dict[str, Any]) -> Dict[str, Any]:
 
     record = _find_image_record(thread_id, ref)
     if record is None:
-        return {"status": "error", "error": f"No image attachment '{ref}' found in this thread."}
+        names = [str(r.get("name") or r.get("id") or "") for r in _list_image_records(thread_id)]
+        available = f" Available images: {', '.join(names)}." if names else ""
+        return {"status": "error", "error": f"No image attachment '{ref}' found in this thread.{available}"}
 
     path = Path(record.get("path") or "")
     if not path.is_file():
@@ -228,21 +246,29 @@ async def image_view(args: Dict[str, Any]) -> Dict[str, Any]:
         {"type": "input_image", "image_url": f"data:{media_type};base64,{encoded}"},
     ]
     # The full LLM router resolves a registered vision model to its provider.
+    # The session must stay open across the call — the router lazy-loads the
+    # model's Provider row while building the request. The chat-picker override
+    # (forced_chat_model) must NOT apply here: inside a turn forced to a
+    # text-only model it would re-route this call right back to that model.
     from db.database import SessionLocal as _SL
     from services.assistants.ask_job_callbacks import openai as _openai_service
+    from services.providers.chat_session import forced_chat_model
     from services.providers.provider_factory import build_llm_router
-    with _SL() as db:
-        llm = build_llm_router(_openai_service, db)
+    forced_token = forced_chat_model.set(None)
     try:
-        result = await llm.ask_async(
-            [{"role": "user", "content": content}],
-            model=vision_model,
-            max_output_tokens=1200,
-            store=False,
-        )
+        with _SL() as db:
+            llm = build_llm_router(_openai_service, db)
+            result = await llm.ask_async(
+                [{"role": "user", "content": content}],
+                model=vision_model,
+                max_output_tokens=1200,
+                store=False,
+            )
     except Exception as exc:  # noqa: BLE001 — a failed look is a tool error, not a crash
         log.warningx("image__view vision-call mislukt", model=vision_model, error=str(exc))
         return {"status": "error", "error": f"Vision call failed on {vision_model}: {exc}"}
+    finally:
+        forced_chat_model.reset(forced_token)
 
     answer = (getattr(result, "text", "") or "").strip()
     return {
