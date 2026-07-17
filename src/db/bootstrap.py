@@ -525,3 +525,12 @@ async def run_bootstrap(db: Session) -> None:
         recover_orphaned_runs(db)
     except Exception as exc:  # noqa: BLE001 — never block boot
         log.warningx("workflow_run_recovery_failed", error=str(exc))
+
+    # Reload the persisted background-task list into the in-memory registry;
+    # tasks still marked "running" were interrupted by this restart and become
+    # error (unacknowledged, so the owner thread is notified next turn).
+    try:
+        from services.builtin.tools.background_tasks import restore_persisted_tasks
+        restore_persisted_tasks(db)
+    except Exception as exc:  # noqa: BLE001 — never block boot
+        log.warningx("background_task_restore_failed", error=str(exc))

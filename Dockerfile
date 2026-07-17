@@ -33,6 +33,8 @@ RUN apt-get update \
  && \
     PUPPETEER_SKIP_DOWNLOAD=true npm install -g @mermaid-js/mermaid-cli \
  && \
+    npm install -g @anthropic-ai/claude-code \
+ && \
     pip install --no-cache-dir pandoc-mermaid-filter \
  && rm -rf /var/lib/apt/lists/*
 

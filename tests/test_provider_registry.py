@@ -110,6 +110,33 @@ def test_assignment_and_resolution(svc):
     assert svc.resolve_slot("chat.planner") is None
 
 
+def test_planner_native_vision_model(svc):
+    # Vision-capable model on the planner slot → native multimodal passthrough.
+    p = svc.create_provider(ProviderCreate(name="Anthropic", provider_type="anthropic", api_key="k"))
+    m = svc.create_model(ProviderModelCreate(provider_id=p.id, model_id="claude-opus-4-8", capability="chat"))
+    svc.set_assignment("chat.planner", m.id)
+    assert svc.planner_native_vision_model(None) == "claude-opus-4-8"
+
+    # Forced text-only active model → describe fallback (None).
+    o = svc.create_provider(ProviderCreate(name="LocalOllama", provider_type="ollama", is_local=True))
+    svc.create_model(ProviderModelCreate(provider_id=o.id, model_id="qwen2.5:14b", capability="chat"))
+    assert svc.planner_native_vision_model("qwen2.5:14b") is None
+
+    # Forced local vision model → native, fully local.
+    svc.create_model(ProviderModelCreate(provider_id=o.id, model_id="qwen2.5vl:7b", capability="chat"))
+    assert svc.planner_native_vision_model("qwen2.5vl:7b") == "qwen2.5vl:7b"
+
+
+def test_planner_native_vision_model_excludes_cli_agents(svc):
+    # A CLI-agent planner drives its own loop from the plain conversation —
+    # content blocks never reach it, so it must keep the describe path.
+    p = svc.create_provider(ProviderCreate(name="CC", provider_type="claude_code"))
+    m = svc.create_model(ProviderModelCreate(
+        provider_id=p.id, model_id="claude-sonnet-5", capability="chat", supports_vision=True))
+    svc.set_assignment("chat.planner", m.id)
+    assert svc.planner_native_vision_model(None) is None
+
+
 def test_delete_provider_cascades_models(svc):
     p = svc.create_provider(ProviderCreate(name="P", provider_type="openai", api_key="k"))
     svc.create_model(ProviderModelCreate(provider_id=p.id, model_id="gpt-x", capability="chat"))

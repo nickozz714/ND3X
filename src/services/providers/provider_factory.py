@@ -82,6 +82,15 @@ def _build_chat_provider(p: Provider, api_key: Optional[str], default_model: str
         return OllamaChatProvider(base_url=p.base_url, default_model=default_model, model_ctx=model_ctx)
     if t == "openai_compatible":
         return OpenAICompatibleChatProvider(base_url=p.base_url, api_key=api_key, default_model=default_model)
+    if t == "azure_foundry":
+        # Azure AI Foundry via the v1 OpenAI-compatible route. model = deployment
+        # name. Phase 1 auth = Azure API key (Entra ID keyless is a later phase),
+        # so a missing key is a config error, not a call-time 401.
+        if not api_key:
+            log.warningx("Azure Foundry provider zonder API key", provider_id=p.id)
+            return None
+        from services.providers.azure_foundry_provider import AzureFoundryChatProvider
+        return AzureFoundryChatProvider(base_url=p.base_url, api_key=api_key, default_model=default_model)
     if t == "openai":
         return OpenAIChatProvider(openai_service)
     if t == "gemini":
@@ -89,6 +98,40 @@ def _build_chat_provider(p: Provider, api_key: Optional[str], default_model: str
             log.warningx("Gemini provider zonder API key", provider_id=p.id)
             return None
         return GeminiChatProvider(api_key=api_key, default_model=default_model, provider_id=p.id)
+    if t == "claude_code":
+        # Headless Claude Code CLI on the local machine. The stored "API key" is
+        # the `claude setup-token` OAuth token (subscription auth); without it
+        # the CLI falls back to the host login (~/.claude). Extra knobs come
+        # from config_json — see claude_code_provider.py for the key list.
+        import json as _json
+        from services.providers.claude_code_provider import ClaudeCodeChatProvider
+        cfg: Dict[str, Any] = {}
+        try:
+            cfg = _json.loads(p.config_json or "{}") or {}
+        except Exception:  # noqa: BLE001
+            log.warningx("Claude Code provider config_json niet parsebaar — defaults gebruikt",
+                         provider_id=p.id)
+        return ClaudeCodeChatProvider(
+            default_model=default_model,
+            oauth_token=api_key,
+            cli_path=str(cfg.get("cli_path") or "claude"),
+            agentic=bool(cfg.get("agentic")),
+            max_turns=cfg.get("max_turns"),
+            timeout=cfg.get("timeout"),
+            workdir=cfg.get("workdir"),
+            allowed_tools=cfg.get("allowed_tools"),
+            extra_args=cfg.get("extra_args"),
+            # This is the CHAT/planner provider: Claude Code is the planning
+            # brain and ND3X executes tools (incl. web search and Fabric via the
+            # chat.web_search / MCP slots). So it must be tool-less here — the
+            # native_* config only governs the separate web_search_service flow,
+            # which builds its own provider instance. Enabling a native tool in
+            # the planner makes Claude Code run its own tool instead of producing
+            # the ND3X plan → wasted turns / error_max_turns.
+            native_web=False,
+            native_files=False,
+            native_bash=False,
+        )
     log.warningx("Onbekend chat provider type", provider_type=t)
     return None
 
@@ -97,6 +140,12 @@ def _build_embedding_provider(p: Provider, api_key: Optional[str], default_model
     t = (p.provider_type or "").strip()
     if t in ("openai_compatible", "ollama", "voyage"):
         return OpenAICompatibleEmbeddingProvider(base_url=p.base_url, api_key=api_key, default_model=default_model)
+    if t == "azure_foundry":
+        if not api_key:
+            log.warningx("Azure Foundry embedding provider zonder API key", provider_id=p.id)
+            return None
+        from services.providers.azure_foundry_provider import AzureFoundryEmbeddingProvider
+        return AzureFoundryEmbeddingProvider(base_url=p.base_url, api_key=api_key, default_model=default_model)
     if t == "gemini" and api_key:
         return GeminiEmbeddingProvider(api_key=api_key, default_model=default_model)
     if t == "openai":

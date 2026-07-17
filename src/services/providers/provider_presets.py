@@ -23,6 +23,19 @@ PRESETS = [
         "needs_base_url": False, "is_local": False, "capabilities": ["chat"],
     },
     {
+        # NOT is_local: only the CLI binary runs locally — the models are cloud
+        # (subscription). is_local would hide it from the FE cloud-preset list
+        # and trigger local-model treatment (light prompts) it doesn't need.
+        "key": "claude_code", "provider_type": "claude_code", "label": "Claude Code (CLI)",
+        "description": "Runs the local Claude Code CLI on your Claude subscription — no per-token "
+                       "cost. Paste the token from `claude setup-token` as the API key, or leave "
+                       "it empty to use this machine's `claude` login.",
+        "base_url": "", "api_key_url": "",
+        # Token is optional: without it the CLI uses the host's own login.
+        "needs_base_url": False, "needs_api_key": False, "is_local": False,
+        "capabilities": ["chat"],
+    },
+    {
         "key": "gemini", "provider_type": "gemini", "label": "Google Gemini",
         "description": "Gemini 1.5/2.0 — huge context windows, multimodal, cheap Flash tier.",
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -35,6 +48,16 @@ PRESETS = [
         "base_url": "https://api.voyageai.com/v1",
         "api_key_url": "https://dashboard.voyageai.com/",
         "needs_base_url": False, "is_local": False, "capabilities": ["embeddings"],
+    },
+    {
+        "key": "azure_foundry", "provider_type": "azure_foundry", "label": "Azure AI Foundry",
+        "description": "Azure-hosted models via the v1 OpenAI-compatible API — Azure OpenAI "
+                       "(GPT-4o/4.1/o-series) plus DeepSeek, Grok, Llama, Phi and Mistral "
+                       "deployments. Base URL = your resource endpoint "
+                       "(https://<resource>.openai.azure.com — /openai/v1 is added "
+                       "automatically). Model id = your DEPLOYMENT name, not the model name.",
+        "base_url": "", "api_key_url": "https://ai.azure.com",
+        "needs_base_url": True, "is_local": False, "capabilities": ["chat", "embeddings"],
     },
     {
         "key": "ollama_cloud", "provider_type": "openai_compatible", "label": "Ollama Cloud (Llama)",

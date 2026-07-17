@@ -12,6 +12,7 @@ from services.assistants.orchestration.pipeline_runner_factory import AssistantP
 from services.mcp.tool_execution_service import ToolExecutionService
 from services.openai_service import OpenAIResponsesService
 from services.workflows.assistant_operation_runner import AssistantOperationRunner
+from services.workflows.claude_code_operation_runner import ClaudeCodeOperationRunner
 from services.workflows.prompt_varable_resolver import PromptVariableResolver
 from services.workflows.prompt_variable_executor import PromptVariableExecutor
 from services.workflows.workflow_executor import WorkflowExecutor
@@ -105,11 +106,17 @@ class WorkflowExecutionProvider:
             resolver_type=type(prompt_variable_resolver).__name__,
         )
 
+        # Alternative per-operation engine: run an activity as an autonomous
+        # Claude Code CLI task. Only used when an operation opts in via
+        # config.execution.engine == "claude_code".
+        claude_code_runner = ClaudeCodeOperationRunner(self.db)
+
         executor = WorkflowExecutor(
             workflow_repository=WorkflowRepository(self.db),
             run_repository=WorkflowRunRepository(self.db),
             assistant_runner=assistant_runner,
             prompt_variable_resolver=prompt_variable_resolver,
+            claude_code_runner=claude_code_runner,
         )
 
         log.infox(

@@ -1,0 +1,599 @@
+"""
+services/providers/claude_code_provider.py
+
+Chat adapter that runs the Claude Code CLI in headless mode (`claude -p`).
+
+Why a provider and not a tool: this makes Claude Code selectable on the normal
+routing slots (chat, cognition, ...) like any other model. Each chat() call
+spawns one non-interactive CLI run; ND3X keeps carrying the conversation, so
+the adapter is stateless (no --resume) and fits the ChatProvider contract.
+
+Auth is SUBSCRIPTION-based, not API-key-based: the provider's stored "API key"
+is the long-lived OAuth token from `claude setup-token`, injected into the
+subprocess as CLAUDE_CODE_OAUTH_TOKEN. ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN
+are stripped from the subprocess env — if either is present the CLI silently
+bills the API instead of the subscription. With no token stored, the CLI falls
+back to the host login (~/.claude), which is the desktop-app case.
+
+Two modes (per-provider `config_json`):
+- default (agentic=false): behaves like a plain chat model — one turn
+  (--max-turns 1) and the built-in tools disallowed.
+- agentic=true: Claude Code keeps its own tools and agent loop and runs with
+  --permission-mode bypassPermissions. NOTE: that executes shell commands in
+  THIS process's environment/container — only enable it on isolated deploys.
+
+Native-capability choices (plain-chat mode): what runs inside the CLI vs what
+stays with the ND3X orchestrator is an EXPLICIT per-provider choice, not an
+accident of flags. `native_web` (default true) allows WebSearch/WebFetch and
+also feeds the ND3X `web_search` tool (web_search_service routes to the CLI
+when the chat slot holds this provider); `native_files` (Read/Glob/Grep) and
+`native_bash` (Bash/Edit/Write) default false — they execute in the ND3X
+process environment, so the orchestrator's own tools stay authoritative
+unless deliberately enabled.
+
+config_json keys (all optional):
+  {"agentic": bool, "cli_path": "claude", "timeout": 600, "max_turns": int,
+   "workdir": "/path", "allowed_tools": "Bash(git:*) Read", "extra_args": [...],
+   "native_web": true, "native_files": false, "native_bash": false}
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+from typing import Any, AsyncIterator, Dict, List, Optional
+
+from component.logging import get_logger
+from services.providers.base import ChatInput, ChatProvider, ChatResult
+
+log = get_logger(__name__)
+
+# Built-in tools disallowed in plain-chat mode so the CLI acts as a pure LLM.
+NON_AGENTIC_DISALLOWED_TOOLS = (
+    "Bash,Edit,Write,NotebookEdit,Read,Glob,Grep,WebFetch,WebSearch,Task,TodoWrite"
+)
+
+# Env vars stripped from the subprocess:
+# - ANTHROPIC_API_KEY / AUTH_TOKEN: if either leaks in, the CLI bills the API
+#   instead of the subscription token.
+# - CLAUDECODE / CLAUDE_CODE_*: when ND3X itself was launched from inside a
+#   Claude Code session (dev!), the nested CLI inherits that session's harness
+#   and its extra tools — the model then calls tools we never gave it.
+_STRIPPED_ENV_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDECODE")
+_STRIPPED_ENV_PREFIXES = ("CLAUDE_CODE_",)
+
+# Plain-chat mode still leaves room for the model to recover from a stray
+# (denied) tool attempt with a text answer; 1 would hard-fail on the attempt.
+NON_AGENTIC_MAX_TURNS = 4
+
+# A tool name that does not exist. As the sole --allowedTools entry it permits
+# nothing, so every real (and future) CLI tool is blocked — robustly.
+_NO_TOOLS_SENTINEL = "__nd3x_no_tools__"
+
+# StreamReader buffer for the CLI's stdout. The CLI emits one JSON object PER LINE
+# in stream-json mode, and a single line can carry a large tool result (e.g. a
+# Fabric onelake_list_* payload) inlined in the assistant/tool event. asyncio's
+# default readline limit is 64 KB — a bigger line raises "Separator is not found,
+# and chunk exceed the limit". 64 MB gives ample headroom for big tool outputs.
+_STDOUT_LIMIT = 64 * 1024 * 1024
+
+# The no-tools instruction. In ND3X, Claude Code in plain-chat is the PLANNING
+# BRAIN, not the executor: it must produce the planning output the ND3X prompt
+# asks for (often a JSON plan with tool_id calls) as plain text — ND3X runs any
+# tools from that output. So it must not try to invoke tools itself; its own CLI
+# tools are disabled. Spelling this out stops it from reaching for Skill /
+# ToolSearch / Cron* etc. and burning turns.
+NON_AGENTIC_INSTRUCTION = (
+    "You are the planning brain, not a tool executor. Produce exactly the "
+    "response the instructions ask for (often a JSON plan) as plain text. You "
+    "cannot call tools yourself — the ND3X system executes any tools or tool_id "
+    "calls contained in your output. Never attempt to invoke a tool directly; "
+    "your own tools are disabled. Just return the requested planning text/JSON."
+)
+
+# Shared world-context for every AGENTIC Claude Code run (chat turn or workflow
+# step). It answers the three questions a fresh CLI process cannot infer on its
+# own: what ND3X is, where its capabilities live, and the language to reply in.
+# Both the chat agent (ClaudeCodeChatAgent) and the workflow runner
+# (ClaudeCodeOperationRunner) prepend this, then add their own tail (chat: give
+# a direct answer; workflow: end with the handoff envelope). Keep role-specific
+# rules OUT of here — this is only the common ground both roles share, so a fix
+# to the shared context can't land in one role and be missed in the other.
+ND3X_AGENT_PREAMBLE = (
+    "You are the ND3X assistant, running as an autonomous agent inside the ND3X "
+    "self-hosted AI platform.\n\n"
+    "ND3X's own capabilities — connected MCP servers (e.g. Fabric), the agent "
+    "board, ND3X skills, documents and shell — are exposed to you as tools "
+    "prefixed `mcp__nd3x__`. Prefer those for anything involving ND3X data, the "
+    "user's connected services, or ND3X skills; use your own built-in tools (web "
+    "search, file editing) only for general work with no ND3X equivalent. Do not "
+    "use your own Skill/Task/Cron/schedule tools for this — ND3X skills and "
+    "scheduling ARE the `mcp__nd3x__` tools.\n\n"
+    "Scheduling, night-runs, workflows and deployments are ND3X concepts managed "
+    "through the `mcp__nd3x__` tools and the agent board — NOT the host operating "
+    "system's crontab or shell. Never reach for the host OS to change them.\n\n"
+    "Chain tool calls as needed to reach a complete result, and never ask the "
+    "user to approve a tool run — just do the work with the tools you have. "
+    "Answer in the same language the user used."
+)
+
+
+def claude_code_model(model: Optional[str], *, default: str = "opus") -> str:
+    """Coerce a routing model to one the Claude Code CLI can actually run.
+
+    The chat/voice flow may hand us a non-Claude model (e.g. a pinned
+    'gpt-5.4-mini' from a different slot) even when the planner slot resolved to
+    claude_code. The CLI only runs Claude models, so a foreign id makes it exit
+    with 'issue with the selected model …'. Accept the tier aliases and any
+    'claude*' id; otherwise fall back to the provider default."""
+    m = (model or "").strip().lower()
+    if m in ("opus", "sonnet", "haiku") or m.startswith("claude"):
+        return model  # keep original casing
+    return default
+
+# Named native-capability groups: the EXPLICIT choice of what runs inside the
+# Claude Code CLI vs what stays with the ND3X orchestrator. Configured per
+# provider (config_json: native_web / native_files / native_bash) and honored
+# both here (chat runs) and in web_search_service (the ND3X web_search tool).
+NATIVE_TOOL_GROUPS: Dict[str, str] = {
+    "web": "WebSearch,WebFetch",
+    "files": "Read,Glob,Grep",
+    "bash": "Bash,Edit,Write,NotebookEdit",
+}
+
+
+def _default_timeout() -> float:
+    try:
+        from component.config import settings
+        return float(getattr(settings, "CLAUDE_CODE_TIMEOUT", 600) or 600)
+    except Exception:  # noqa: BLE001
+        return 600.0
+
+
+def _to_prompt(user_input: ChatInput) -> str:
+    """Flatten ChatInput to one prompt string for `claude -p` (stdin).
+
+    A plain string passes through. A message list becomes a labeled transcript;
+    provider-neutral content blocks contribute their text (images are not
+    supported over the CLI and are skipped with a warning).
+    """
+    if isinstance(user_input, str):
+        return user_input
+    lines: List[str] = []
+    for m in user_input or []:
+        role = (m.get("role") or "user").strip().lower()
+        content = m.get("content")
+        if isinstance(content, list):
+            texts: List[str] = []
+            for block in content:
+                btype = block.get("type")
+                if btype in {"text", "input_text"}:
+                    texts.append(block.get("text") or "")
+                elif btype in {"image", "input_image"}:
+                    log.warningx("Claude Code CLI ondersteunt geen images in de prompt — blok overgeslagen")
+            text = "\n".join(t for t in texts if t)
+        else:
+            text = content or ""
+        if not text:
+            continue
+        if role == "system":
+            lines.append(f"[system]\n{text}")
+        elif role == "assistant":
+            lines.append(f"Assistant:\n{text}")
+        else:
+            lines.append(f"User:\n{text}")
+    return "\n\n".join(lines)
+
+
+class ClaudeCodeChatProvider(ChatProvider):
+    provider_type = "claude_code"
+    # The CLI has no JSON-schema enforcement; the router falls back to the
+    # non-schema path for providers with this off.
+    supports_structured_output = False
+    supports_streaming = True
+    # CLI agent: on a slot this provider runs in "agent" execution mode — its
+    # own agent loop with its own tools, result via an output contract.
+    is_cli_agent = True
+
+    def __init__(
+        self,
+        *,
+        default_model: str = "",
+        oauth_token: Optional[str] = None,
+        cli_path: str = "claude",
+        agentic: bool = False,
+        max_turns: Optional[int] = None,
+        timeout: Optional[float] = None,
+        workdir: Optional[str] = None,
+        allowed_tools: Optional[str] = None,
+        extra_args: Optional[List[str]] = None,
+        # Explicit native-capability choices (plain-chat mode). Default OFF —
+        # tool-less, because the default plain-chat role is the ND3X PLANNER
+        # brain (ND3X executes tools). Enabling a native tool in the planner
+        # makes Claude Code run its own tool instead of producing the plan.
+        # Only the web_search_service flow opts into native_web (it wants the
+        # CLI to actually search); the workflow autonomous engine uses agentic
+        # mode instead.
+        native_web: bool = False,
+        native_files: bool = False,
+        native_bash: bool = False,
+    ):
+        self._default_model = default_model
+        self._oauth_token = (oauth_token or "").strip() or None
+        self._cli_path = (cli_path or "claude").strip() or "claude"
+        self._agentic = bool(agentic)
+        self._max_turns = max_turns
+        self._timeout = float(timeout) if timeout else _default_timeout()
+        self._workdir = workdir or None
+        self._allowed_tools = allowed_tools or None
+        self._extra_args = list(extra_args or [])
+        self._native = {"web": bool(native_web), "files": bool(native_files), "bash": bool(native_bash)}
+        log.debugx(
+            "ClaudeCodeChatProvider aangemaakt",
+            cli_path=self._cli_path, agentic=self._agentic,
+            has_token=bool(self._oauth_token), timeout=self._timeout,
+            native=self._native,
+        )
+
+    @property
+    def native_web(self) -> bool:
+        """Whether CLI-native web search (WebSearch/WebFetch) is enabled — also
+        consulted by web_search_service for the ND3X web_search tool."""
+        return self._native["web"]
+
+    # ------------------------------------------------------------------ build
+
+    def _build_env(self) -> Dict[str, str]:
+        env = {
+            k: v for k, v in os.environ.items()
+            if k not in _STRIPPED_ENV_VARS and not k.startswith(_STRIPPED_ENV_PREFIXES)
+        }
+        if self._oauth_token:
+            env["CLAUDE_CODE_OAUTH_TOKEN"] = self._oauth_token
+        return env
+
+    def _build_cmd(self, model_id: str, instructions: Optional[str]) -> List[str]:
+        cmd = [self._cli_path, "-p", "--model", model_id]
+        if self._agentic:
+            if instructions:
+                cmd += ["--append-system-prompt", instructions]
+            cmd += ["--permission-mode", "bypassPermissions"]
+            if self._allowed_tools:
+                cmd += ["--allowedTools", self._allowed_tools]
+            if self._max_turns:
+                cmd += ["--max-turns", str(int(self._max_turns))]
+        else:
+            # Plain-chat: the allowlist is the union of the enabled native groups
+            # + an optional expert `allowed_tools`. We ALLOWLIST rather than
+            # blocklist because Claude Code keeps adding tools (Skill, ToolSearch,
+            # CronList, …); a hand-kept disallow list silently misses new ones and
+            # the model burns turns on them → error_max_turns. Whitelisting only
+            # what we permit is robust: with nothing permitted (the planner brain
+            # case), a sentinel tool name blocks EVERYTHING.
+            allowed = [
+                t for group, names in NATIVE_TOOL_GROUPS.items() if self._native.get(group)
+                for t in names.split(",")
+            ]
+            allowed += [t.strip() for t in (self._allowed_tools or "").replace(",", " ").split() if t.strip()]
+            allowed_names = {t.split("(", 1)[0] for t in allowed}
+            if allowed:
+                extra = ("Only use these tools, and only when needed: "
+                         f"{', '.join(sorted(allowed_names))}. Answer in plain text.")
+            else:
+                extra = NON_AGENTIC_INSTRUCTION
+            system = f"{instructions}\n\n{extra}" if instructions else extra
+            cmd += ["--append-system-prompt", system]
+            cmd += ["--max-turns", str(int(self._max_turns or NON_AGENTIC_MAX_TURNS))]
+            # Whitelist: the allowed set, or a non-existent tool that permits
+            # nothing (blocks every real/new CLI tool robustly).
+            cmd += ["--allowedTools", ",".join(dict.fromkeys(allowed)) or _NO_TOOLS_SENTINEL]
+            # Don't load user/project MCP servers in plain-chat mode — their
+            # tools would only be extra bait for a wasted tool attempt.
+            cmd += ["--strict-mcp-config"]
+        cmd += self._extra_args
+        return cmd
+
+    async def _spawn(self, cmd: List[str]) -> asyncio.subprocess.Process:
+        try:
+            return await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=self._build_env(),
+                cwd=self._workdir,
+                limit=_STDOUT_LIMIT,  # big stream-json lines (inlined tool results)
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"Claude Code CLI niet gevonden ('{self._cli_path}') — installeer "
+                "@anthropic-ai/claude-code of zet cli_path in de provider-config."
+            ) from exc
+
+    @staticmethod
+    async def _kill(proc: asyncio.subprocess.Process) -> None:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _record_usage(self, model_id: str, usage: Dict[str, Any]) -> None:
+        try:
+            from services.providers.usage_accumulator import add as _usage_add
+            _usage_add(
+                input_tokens=usage.get("input_tokens"),
+                output_tokens=usage.get("output_tokens"),
+                model=model_id,
+                provider_type=self.provider_type,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ------------------------------------------------------------------- chat
+
+    async def chat(
+        self,
+        user_input: ChatInput,
+        *,
+        model: Optional[str] = None,
+        instructions: Optional[str] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        max_output_tokens: Optional[int] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """One headless CLI run: prompt in via stdin, JSON result envelope out.
+
+        temperature/top_p/max_output_tokens have no CLI equivalent and are
+        ignored; response_format is ignored (supports_structured_output=False,
+        the router never sends it here).
+        """
+        model_id = model or self._default_model
+        prompt = _to_prompt(user_input)
+        cmd = self._build_cmd(model_id, instructions) + ["--output-format", "json"]
+
+        proc = await self._spawn(cmd)
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(prompt.encode("utf-8")), timeout=self._timeout
+            )
+        except asyncio.TimeoutError:
+            await self._kill(proc)
+            raise RuntimeError(
+                f"Claude Code run overschreed de timeout ({self._timeout:.0f}s) voor '{model_id}'"
+            )
+
+        if proc.returncode != 0:
+            # The CLI also exits non-zero for in-band errors (auth, usage limit,
+            # max turns) whose real message is the JSON envelope on STDOUT —
+            # surface that; stderr is often empty.
+            err = (stderr or b"").decode("utf-8", errors="replace").strip()
+            try:
+                data = self._parse_result(stdout)
+                detail = f"{data.get('subtype')}: {str(data.get('result') or '')[:400]}"
+            except Exception:  # noqa: BLE001
+                out = (stdout or b"").decode("utf-8", errors="replace").strip()
+                detail = err[-400:] or out[-400:] or "geen stderr/stdout"
+            raise RuntimeError(
+                f"Claude Code CLI faalde (exit {proc.returncode}) voor '{model_id}': {detail}"
+            )
+
+        data = self._parse_result(stdout)
+        if data.get("is_error"):
+            raise RuntimeError(
+                f"Claude Code gaf een fout terug ({data.get('subtype')}): "
+                f"{str(data.get('result') or '')[:400]}"
+            )
+
+        usage = data.get("usage") or {}
+        if data.get("total_cost_usd") is not None:
+            # Indicative only — subscription runs are not billed per token.
+            usage = {**usage, "total_cost_usd": data.get("total_cost_usd")}
+        self._record_usage(model_id, usage)
+        return ChatResult(
+            text=str(data.get("result") or ""),
+            response_id=str(data.get("session_id") or ""),
+            raw=data,
+            provider=self.provider_type,
+            model=model_id,
+            usage=usage,
+        )
+
+    @staticmethod
+    def _parse_result(stdout: bytes) -> Dict[str, Any]:
+        """`--output-format json` prints one JSON object; be tolerant of stray
+        lines around it (npm/node warnings) by scanning for the result event."""
+        text = (stdout or b"").decode("utf-8", errors="replace").strip()
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:  # noqa: BLE001
+            pass
+        for line in text.splitlines():
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:  # noqa: BLE001
+                continue
+            if isinstance(obj, dict) and obj.get("type") == "result":
+                return obj
+        raise RuntimeError(f"Claude Code output niet parsebaar als JSON: {text[:400]!r}")
+
+    # ------------------------------------------------------------------ stream
+
+    async def chat_stream_events(
+        self,
+        user_input: ChatInput,
+        *,
+        model: Optional[str] = None,
+        instructions: Optional[str] = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Typed agent-run events, distinguishing PROCESS from ANSWER (for the
+        agentic chat: process → the steps view, answer → the chat reply).
+
+        Yields dicts:
+          {"kind": "thinking", "text": ...}  interim assistant text (accompanying
+                                             a tool step) — what the agent 'says'
+                                             while working.
+          {"kind": "tool", "name": ..., "input": ...}  a tool the agent called.
+          {"kind": "answer", "text": ...}    the final answer (the CLI `result`).
+        """
+        model_id = model or self._default_model
+        prompt = _to_prompt(user_input)
+        cmd = self._build_cmd(model_id, instructions) + ["--output-format", "stream-json", "--verbose"]
+
+        proc = await self._spawn(cmd)
+        answer_fallback: List[str] = []
+        usage: Dict[str, Any] = {}
+        try:
+            assert proc.stdin is not None and proc.stdout is not None
+            proc.stdin.write(prompt.encode("utf-8"))
+            await proc.stdin.drain()
+            proc.stdin.close()
+
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self._timeout
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise RuntimeError(f"Claude Code stream overschreed de timeout ({self._timeout:.0f}s)")
+                raw = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
+                if not raw:
+                    break
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line.startswith("{"):
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:  # noqa: BLE001
+                    continue
+                otype = obj.get("type")
+                if otype == "assistant":
+                    content = (obj.get("message") or {}).get("content") or []
+                    has_tool = any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content)
+                    for b in content:
+                        if not isinstance(b, dict):
+                            continue
+                        if b.get("type") == "text":
+                            text = b.get("text") or ""
+                            if not text:
+                                continue
+                            if has_tool:
+                                yield {"kind": "thinking", "text": text}
+                            else:
+                                # A text-only assistant turn — the (running) answer.
+                                answer_fallback.append(text)
+                        elif b.get("type") == "tool_use":
+                            yield {"kind": "tool", "name": b.get("name"), "input": b.get("input")}
+                elif otype == "result":
+                    if obj.get("is_error"):
+                        raise RuntimeError(
+                            f"Claude Code gaf een fout terug ({obj.get('subtype')}): "
+                            f"{str(obj.get('result') or '')[:400]}")
+                    usage = obj.get("usage") or {}
+                    answer = obj.get("result")
+                    yield {"kind": "answer", "text": (answer if isinstance(answer, str) else "".join(answer_fallback))}
+
+            rc = await proc.wait()
+            if rc != 0:
+                err = (await proc.stderr.read()).decode("utf-8", errors="replace") if proc.stderr else ""
+                raise RuntimeError(f"Claude Code CLI faalde (exit {rc}) voor '{model_id}': {err.strip()[-800:]}")
+            self._record_usage(model_id, usage)
+        finally:
+            if proc.returncode is None:
+                await self._kill(proc)
+
+    async def chat_stream(
+        self,
+        user_input: ChatInput,
+        *,
+        model: Optional[str] = None,
+        instructions: Optional[str] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        max_output_tokens: Optional[int] = None,
+        metadata: Optional[Dict[str, str]] = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[str]:
+        """Yield text deltas from `--output-format stream-json`.
+
+        Token-level deltas come from --include-partial-messages (stream_event /
+        content_block_delta). If the installed CLI doesn't emit those, fall back
+        to the buffered assistant-message text collected along the way.
+        """
+        model_id = model or self._default_model
+        prompt = _to_prompt(user_input)
+        cmd = self._build_cmd(model_id, instructions) + [
+            "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+        ]
+
+        proc = await self._spawn(cmd)
+        yielded_deltas = False
+        buffered: List[str] = []
+        usage: Dict[str, Any] = {}
+        try:
+            assert proc.stdin is not None and proc.stdout is not None
+            proc.stdin.write(prompt.encode("utf-8"))
+            await proc.stdin.drain()
+            proc.stdin.close()
+
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self._timeout
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise RuntimeError(
+                        f"Claude Code stream overschreed de timeout ({self._timeout:.0f}s)"
+                    )
+                raw = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
+                if not raw:
+                    break
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line.startswith("{"):
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:  # noqa: BLE001
+                    continue
+                otype = obj.get("type")
+                if otype == "stream_event":
+                    event = obj.get("event") or {}
+                    delta = event.get("delta") or {}
+                    if event.get("type") == "content_block_delta" and delta.get("type") == "text_delta":
+                        text = delta.get("text") or ""
+                        if text:
+                            yielded_deltas = True
+                            yield text
+                elif otype == "assistant":
+                    msg = obj.get("message") or {}
+                    for block in msg.get("content") or []:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            buffered.append(block.get("text") or "")
+                elif otype == "result":
+                    if obj.get("is_error"):
+                        raise RuntimeError(
+                            f"Claude Code gaf een fout terug ({obj.get('subtype')}): "
+                            f"{str(obj.get('result') or '')[:400]}"
+                        )
+                    usage = obj.get("usage") or {}
+
+            rc = await proc.wait()
+            if rc != 0:
+                err = (await proc.stderr.read()).decode("utf-8", errors="replace") if proc.stderr else ""
+                raise RuntimeError(
+                    f"Claude Code CLI faalde (exit {rc}) voor '{model_id}': {err.strip()[-800:]}"
+                )
+            if not yielded_deltas:
+                text = "".join(buffered)
+                if text:
+                    yield text
+            self._record_usage(model_id, usage)
+        finally:
+            if proc.returncode is None:
+                await self._kill(proc)

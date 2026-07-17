@@ -25,6 +25,15 @@ def provider_supports_vision(provider_type: Optional[str], model_id: Optional[st
         if any(k in m for k in ("embedding", "whisper", "tts", "realtime", "audio")):
             return False
         return any(k in m for k in ("gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4", "gpt-4-turbo"))
+    if p == "azure_foundry":
+        # Foundry hosts OpenAI models AND open models (Llama/Phi/Mistral/…).
+        # model_id is the deployment name, which by convention contains the
+        # model name — match both families. Per-model override wins as always.
+        if any(k in m for k in ("embedding", "whisper", "tts", "realtime", "audio")):
+            return False
+        return (any(k in m for k in ("gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4", "gpt-4-turbo"))
+                or any(k in m for k in _LOCAL_VISION_MARKERS)
+                or "multimodal" in m)
     if p == "anthropic":
         # All Claude 3+ chat models are vision-capable.
         return "claude" in m

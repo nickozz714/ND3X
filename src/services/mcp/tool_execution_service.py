@@ -21,15 +21,24 @@ class ToolExecutionService:
         self.auth_repo = MCPServerAuthRepository(db)
         log.debugx("MCPServerAuthRepository gekoppeld aan ToolExecutionService")
         self.client_factory = MCPClientFactory()
-        # Attach the shared builtin MCP client so builtin (in-process) tools — text
-        # search/ingest, internal tools, shell/az-login — resolve. Lazy import avoids
-        # a circular import with ask_job_callbacks (which imports this module).
+        # Attach the shared builtin MCP client AND the shared stdio process manager
+        # so builtin (in-process) tools — text search/ingest, internal tools,
+        # shell/az-login — AND stdio MCP servers (Fabric/OneLake, …) both resolve.
+        # Without the stdio manager, building a client for a `stdio` server raises
+        # "StdioProcessManager is niet geconfigureerd". Lazy import avoids a
+        # circular import with ask_job_callbacks (which imports this module).
         try:
             from services.assistants.ask_job_callbacks import builtin_mcp_client
             if builtin_mcp_client is not None:
                 self.client_factory.set_builtin_mcp_client(builtin_mcp_client)
         except Exception as exc:  # noqa: BLE001 — never break construction on wiring
             log.warningx("Builtin MCP client niet gekoppeld aan ToolExecutionService", error=str(exc))
+        try:
+            from services.assistants.ask_job_callbacks import stdio_process_manager
+            if stdio_process_manager is not None:
+                self.client_factory.set_stdio_process_manager(stdio_process_manager)
+        except Exception as exc:  # noqa: BLE001 — never break construction on wiring
+            log.warningx("Stdio process manager niet gekoppeld aan ToolExecutionService", error=str(exc))
         log.debugx("MCPClientFactory gekoppeld aan ToolExecutionService")
 
     async def execute_tool(self, tool_id: int, args: dict):

@@ -51,6 +51,7 @@ class WorkflowExecutor:
         run_repository: WorkflowRunRepository,
         assistant_runner: AssistantOperationRunner,
         prompt_variable_resolver=None,
+        claude_code_runner=None,
     ):
         log.infox(
             "WorkflowExecutor initialiseren",
@@ -66,6 +67,9 @@ class WorkflowExecutor:
         self.run_repository = run_repository
         self.assistant_runner = assistant_runner
         self.prompt_variable_resolver = prompt_variable_resolver
+        # Optional alternative engine: run an assistant activity as an autonomous
+        # Claude Code CLI task (config.execution.engine == "claude_code").
+        self.claude_code_runner = claude_code_runner
         log.infox("WorkflowExecutor geïnitialiseerd")
 
 
@@ -1716,6 +1720,9 @@ class WorkflowExecutor:
                 if operation.operation_type == "tool":
                     return await self._execute_tool_operation(operation, input_payload, context)
 
+                if operation.operation_type == "board_pull":
+                    return await self._execute_board_pull_operation(operation, input_payload, context)
+
                 log.errorx(
                     "Unsupported workflow operation_type",
                     workflow_run_id=context.get("workflow_run_id"),
@@ -2205,6 +2212,77 @@ class WorkflowExecutor:
         output = {"mode": "set_variable", "status": "success", "variables_set": resolved, "trace": []}
         self._append_trace_event(output["trace"], "workflow_variables_set", {"operation_id": operation.id, "variable_names": list(resolved.keys())})
         return output
+
+    async def _execute_board_pull_operation(self, operation: Any, input_payload: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Select the top-N items of a board column and emit them as a For-Each
+        iterable. This is the 'work the TODO / a subset' primitive: a downstream
+        For-Each fans out over the items (each item becomes a child input_payload),
+        and each child runs an assistant step (orchestrator OR claude_code engine)
+        that does the work and writes the result back via board__update.
+
+        config:
+          {"status": "todo",        # which column to pull from
+           "limit": 3,              # top-N by priority (the throttle)
+           "ready_only": true,      # skip items with unfinished dependencies
+           "iterable_name": "items",# For-Each iterable key
+           "claim": true}           # move pulled items to 'doing' so a later run
+                                    # doesn't pick them up again
+        """
+        from db.database import SessionLocal
+        from services.board_service import BoardService
+
+        config = operation.config or {}
+        status = str(config.get("status") or "todo").strip().lower()
+        limit = int(config.get("limit") if config.get("limit") is not None else 3)
+        ready_only = bool(config.get("ready_only", True))
+        iterable_name = str(config.get("iterable_name") or "items").strip() or "items"
+        claim = bool(config.get("claim", True))
+
+        with SessionLocal() as db:
+            svc = BoardService(db)
+            try:
+                items = svc.pull(status=status, limit=limit, ready_only=ready_only)
+            except ValueError as exc:
+                raise ValueError(f"board_pull: {exc}")
+            picked = [
+                {
+                    "board_item_id": it.id,
+                    "title": it.title,
+                    "description": it.description,
+                    "acceptance": it.acceptance,
+                    "priority": it.priority,
+                    "labels": list(it.labels or []),
+                    "depends_on": list(it.depends_on or []),
+                }
+                for it in items
+            ]
+            if claim:
+                for it in items:
+                    svc.move_item(it.id, "doing", actor="agent")
+
+        trace: list = []
+        self._append_trace_event(trace, "workflow_board_pull", {
+            "operation_id": operation.id, "status": status, "limit": limit,
+            "ready_only": ready_only, "claimed": claim, "picked": len(picked),
+            "item_ids": [p["board_item_id"] for p in picked],
+        })
+        return {
+            "mode": "board_pull",
+            "status": "success",
+            "answer": f"Pulled {len(picked)} item(s) from the '{status}' column.",
+            "picked_count": len(picked),
+            # For-Each reads downstream_handoff.iterables.<name>.
+            "downstream_handoff": {
+                "summary": f"{len(picked)} board item(s) pulled from '{status}'.",
+                "full_answer": None,
+                "artifacts": [],
+                "facts": {"picked_item_ids": [p["board_item_id"] for p in picked]},
+                "iterables": {iterable_name: picked},
+                "open_questions": [],
+                "status": "success",
+            },
+            "trace": trace,
+        }
 
     async def _execute_new_thread_operation(self, operation: Any, input_payload: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """Create a NEW conversation thread (a GUID) and store it as a workflow
@@ -3328,15 +3406,45 @@ class WorkflowExecutor:
             if isinstance(resolved_thread, str) and resolved_thread.strip():
                 shared_session_id = resolved_thread.strip()
 
-        result = await self.assistant_runner.run(
-            assistant_id=operation.operation_ref_id,
-            question=question,
-            payload=run_payload,
-            workflow_run_id=context["workflow_run_id"],
-            operation_id=operation.id,
-            model=config.get("model"),
-            session_id=shared_session_id,
-        )
+        # Per-operation execution engine. Default "orchestrator" = the ND3X agent
+        # loop with ND3X tools (below). "agent" (alias "claude_code") runs the step
+        # as one autonomous CLI-agent task, fully outside the orchestrator; it
+        # returns a pipeline-shaped result so all handling below is unchanged.
+        _exec_cfg = config.get("execution") if isinstance(config.get("execution"), dict) else {}
+        _engine = str(_exec_cfg.get("engine") or "orchestrator").strip().lower()
+        _is_agent_engine = _engine in ("agent", "claude_code")
+        if _is_agent_engine and self.claude_code_runner is not None:
+            log.infox(
+                "Assistant workflow operation draait op de claude_code engine",
+                workflow_run_id=context.get("workflow_run_id"),
+                operation_id=getattr(operation, "id", None),
+            )
+            result = await self.claude_code_runner.run(
+                question=question,
+                operation_config=config,
+                run_transcript=self._workflow_run_transcript(context),
+                # The engine's own model field wins over any leftover orchestrator
+                # pin (config.model) — that pin may be a GPT/local model the CLI
+                # can't run. None → the claude_code provider default.
+                model=(_exec_cfg.get("model") or None),
+                workflow_run_id=context["workflow_run_id"],
+                operation_id=operation.id,
+            )
+        elif _is_agent_engine:
+            raise RuntimeError(
+                "Operation is set to the 'agent' (claude_code) engine, but no "
+                "CLI-agent provider is available. Add and enable one under AI "
+                "Models, or switch this step back to the orchestrator engine.")
+        else:
+            result = await self.assistant_runner.run(
+                assistant_id=operation.operation_ref_id,
+                question=question,
+                payload=run_payload,
+                workflow_run_id=context["workflow_run_id"],
+                operation_id=operation.id,
+                model=config.get("model"),
+                session_id=shared_session_id,
+            )
 
         log.infox(
             "Assistant workflow operation runner resultaat ontvangen",

@@ -195,15 +195,26 @@ class ProviderRegistryService:
         return True
 
     # ── Capability assignments ───────────────────────────────────────────────
+    @staticmethod
+    def _execution_mode(provider_type: Optional[str], assigned: bool) -> Optional[str]:
+        """'agent' for a CLI-agent provider, 'model' for a plain one, None when the
+        slot is unassigned (step off — the no-fallback rule). For the UI badge."""
+        if not assigned:
+            return None
+        from services.providers.execution_mode import is_cli_agent_type
+        return "agent" if is_cli_agent_type(provider_type) else "model"
+
     def list_assignments(self) -> List[CapabilityAssignmentRead]:
         out: List[CapabilityAssignmentRead] = []
         for a in self.db.query(CapabilityAssignment).order_by(CapabilityAssignment.slot).all():
             pm = a.provider_model
+            ptype = (pm.provider.provider_type if pm and pm.provider else None)
             out.append(CapabilityAssignmentRead(
                 slot=a.slot,
                 provider_model_id=a.provider_model_id,
-                provider_type=(pm.provider.provider_type if pm and pm.provider else None),
+                provider_type=ptype,
                 model_id=(pm.model_id if pm else None),
+                execution_mode=self._execution_mode(ptype, a.provider_model_id is not None),
             ))
         return out
 
@@ -214,6 +225,21 @@ class ProviderRegistryService:
         from services.providers.capability_router import ALL_SLOTS
         if slot not in ALL_SLOTS:
             raise ValueError(f"Unknown routing slot '{slot}'. Valid slots: {', '.join(ALL_SLOTS)}")
+        # No-fallback rule + modality guard: a CLI-agent provider runs its own agent
+        # loop and has no interface for modality/realtime work (TTS/STT/live/
+        # embeddings/image). Reject it at ASSIGNMENT time rather than silently
+        # substituting another model at runtime.
+        if provider_model_id is not None:
+            from services.providers.execution_mode import MODALITY, capability_class, is_cli_agent_type
+            if capability_class(slot) == MODALITY:
+                from models.provider import ProviderModel
+                pm_row = self.db.query(ProviderModel).filter(ProviderModel.id == provider_model_id).first()
+                ptype = (pm_row.provider.provider_type if pm_row and pm_row.provider else None)
+                if is_cli_agent_type(ptype):
+                    raise ValueError(
+                        f"A CLI-agent provider (e.g. Claude Code) cannot be assigned to the "
+                        f"modality slot '{slot}': TTS/STT/live/embeddings/image run in the "
+                        f"orchestrator only. Assign a normal model provider here.")
         obj = self.db.query(CapabilityAssignment).filter(CapabilityAssignment.slot == slot).first()
         if obj is None:
             obj = CapabilityAssignment(slot=slot, provider_model_id=provider_model_id)
@@ -223,11 +249,13 @@ class ProviderRegistryService:
         self.db.commit()
         self.db.refresh(obj)
         pm = obj.provider_model
+        ptype = (pm.provider.provider_type if pm and pm.provider else None)
         return CapabilityAssignmentRead(
             slot=obj.slot,
             provider_model_id=obj.provider_model_id,
-            provider_type=(pm.provider.provider_type if pm and pm.provider else None),
+            provider_type=ptype,
             model_id=(pm.model_id if pm else None),
+            execution_mode=self._execution_mode(ptype, obj.provider_model_id is not None),
         )
 
     def model_needs_extra_guidance(self, model_id: Optional[str]) -> bool:
@@ -287,6 +315,30 @@ class ProviderRegistryService:
                     return m.model_id
             return None
         except Exception:  # noqa: BLE001
+            return None
+
+    def planner_native_vision_model(self, active_model: Optional[str] = None) -> Optional[str]:
+        """The model that will RUN the planner loop this turn, iff it can look
+        at images itself (native multimodal passthrough): the active/forced
+        chat model when set, else the chat.planner slot model. None → the
+        loop's model cannot see, or the planner is a CLI agent (which drives
+        its own loop from the plain conversation — content blocks never reach
+        it) — use the describe fallback instead."""
+        try:
+            mid = (active_model or "").strip()
+            if not mid:
+                r = self.resolve_slot("chat.planner")
+                mid = ((getattr(r, "model_id", None) if r else None) or "").strip()
+            if not mid or not self.model_is_vision_capable(mid):
+                return None
+            from services.providers.execution_mode import is_cli_agent_type
+            rows = self.db.query(ProviderModel).filter(ProviderModel.model_id == mid).all()
+            for r in rows:
+                p = r.provider
+                if p is not None and p.enabled and r.enabled and is_cli_agent_type(p.provider_type):
+                    return None
+            return mid
+        except Exception:  # noqa: BLE001 — never break the turn on a lookup
             return None
 
     def model_prompt_light(self, model_id: Optional[str]) -> bool:

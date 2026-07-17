@@ -220,12 +220,50 @@ class LLMRouter:
                 }}
             else:
                 kwargs = {**kwargs, "response_format": {"type": "json_object"}}
+        elif (
+            not (role or "").startswith("writer:")
+            and json_schema
+            and getattr(provider, "is_cli_agent", False)
+        ):
+            # Fase 4 — decision/generator slots on a CLI-agent provider. A CLI agent
+            # can't enforce response_format, so instead of silently dropping the
+            # schema we put it IN the prompt and rely on tolerant JSON parsing. This
+            # gives memory_decision/auto_decision/wizards a real agent mode (no
+            # fallback to another model).
+            import json as _json
+            _schema_directive = (
+                "\n\nReturn ONLY a single JSON object matching this schema — no prose, "
+                "no markdown fences:\n" + _json.dumps(json_schema))
+            kwargs = {**kwargs, "instructions": (kwargs.get("instructions") or "") + _schema_directive}
         rf = kwargs.get("response_format") or {}
         log.infox("LLMRouter chat naar alternatieve provider", role=role,
                   requested_model=model, effective_model=eff_model or model,
                   provider=provider.provider_type,
                   json_mode=(rf.get("type") if isinstance(rf, dict) else bool(rf)))
         return await self._dispatch_chat(provider, eff_model or model, user_input, kwargs, role=role)
+
+    def chat_provider_type(self, model: Optional[str] = None, role: Optional[str] = None) -> Optional[str]:
+        """The provider_type that this role/model resolves to (e.g. 'claude_code',
+        'anthropic', 'ollama'), or None when it falls through to the OpenAI base
+        path. Lets the pipeline branch on the planner provider (option A: run
+        Claude Code as a full agent instead of the ND3X planner loop)."""
+        return self.chat_provider_and_model(model, role)[0]
+
+    def chat_provider_and_model(self, model: Optional[str] = None,
+                                role: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+        """(provider_type, effective_model) for this role/model. The effective
+        model is what the resolved provider (its routing slot) actually uses —
+        for claude_code that's the Claude model assigned on the chat.planner
+        slot, NOT any foreign pin the caller passed. Returns (None, None) on the
+        OpenAI base path."""
+        try:
+            resolved = self._resolve_chat(model, role)
+        except Exception:  # noqa: BLE001
+            return None, None
+        if resolved is None:
+            return None, None
+        provider, eff_model = resolved
+        return getattr(provider, "provider_type", None), (eff_model or model)
 
     def resolves_to_openai(self, model: Optional[str] = None, role: Optional[str] = None) -> bool:
         """True when this role/model uses the OpenAI base path, where the planner JSON comes

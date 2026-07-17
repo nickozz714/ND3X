@@ -104,7 +104,7 @@ def _json(value: Any) -> str:
 
 def _build_transcript_messages(
     assistant: Any, question: str, payload: Dict[str, Any], plan_prompt: str
-) -> List[Dict[str, str]]:
+) -> List[Dict[str, Any]]:
     """Build a structured conversation for the transcript path (every provider when the
     OpenAI server-side session is off).
 
@@ -117,16 +117,25 @@ def _build_transcript_messages(
     acc_calls = payload.get("_acc_tool_calls") or []
     acc_results = payload.get("_acc_tool_results") or []
     acc_docs = payload.get("_acc_docs") or []
+    image_blocks = payload.get("_attachment_image_blocks") or []
+
+    def _anchor_turn(text: str) -> Dict[str, Any]:
+        # Native multimodal: this turn's images ride on the anchor user message
+        # every hop — the transcript is rebuilt statelessly per hop, so the
+        # model must receive the pixels each time it is called.
+        if image_blocks:
+            return {"role": "user", "content": [{"type": "input_text", "text": text}, *image_blocks]}
+        return {"role": "user", "content": text}
 
     # First hop (nothing accumulated yet): the plan_prompt already IS the full anchor.
     if not (acc_calls or acc_results or acc_docs):
-        return [{"role": "user", "content": plan_prompt}]
+        return [_anchor_turn(plan_prompt)]
 
     anchor_payload = dict(payload)
     anchor_payload["_history_anchor"] = True
     anchor = assistant.prompt(question=question, **anchor_payload)
 
-    messages: List[Dict[str, str]] = [{"role": "user", "content": anchor}]
+    messages: List[Dict[str, Any]] = [_anchor_turn(anchor)]
     for i in range(max(len(acc_calls), len(acc_results))):
         if i < len(acc_calls):
             messages.append({
@@ -948,6 +957,15 @@ class AssistantPipelineRunner:
         #   loop behave identically on OpenAI / Anthropic / local.
         if supports_session:
             plan_input: Any = plan_prompt
+            image_blocks = planner_payload.get("_attachment_image_blocks") or []
+            if image_blocks and not is_planner_continuation:
+                # Native multimodal on the server-side-session path: the images
+                # ride on the first call of the turn; the Responses session
+                # retains them server-side for the later hops.
+                plan_input = [{
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": plan_prompt}, *image_blocks],
+                }]
         else:
             plan_input = _build_transcript_messages(assistant, question, planner_payload, plan_prompt)
 
@@ -966,9 +984,132 @@ class AssistantPipelineRunner:
         # route (not the server-side-session route, to avoid touching the response chain).
         # Any failure → fall back to the normal non-streaming call (zero regression).
         plan_resp = None
+        # Option A — Claude Code as a FULL AGENT. When the chat planner slot
+        # resolves to claude_code, don't run the ND3X planner loop (Claude Code is
+        # an autonomous agent and stalls in the plan-JSON role). Instead let it
+        # drive its own agent loop with ND3X's tools/skills/MCP via the gateway,
+        # then wrap its natural-language answer as a final plan so this loop ends
+        # here. Not for workflow-background turns (those use the claude_code
+        # workflow engine).
+        _cc_type = None
+        _cc_model = model
+        try:
+            _cc_probe = getattr(self.openai, "chat_provider_and_model", None)
+            if callable(_cc_probe) and not is_workflow_background:
+                _cc_type, _cc_model = _cc_probe(model, planner_role)
+        except Exception:  # noqa: BLE001
+            _cc_type = None
+        # Capability-based, not a provider_type string: any CLI-agent provider
+        # (Claude Code now, Codex later) runs the chat turn in agent mode.
+        from services.providers.execution_mode import is_cli_agent_type
+        if is_cli_agent_type(_cc_type):
+            from db.database import SessionLocal
+            from services.assistants.claude_code_chat_agent import ClaudeCodeChatAgent
+            # Give the agent the CLEAN conversation (history + the question), NOT
+            # the ND3X planner prompt. Feeding it plan_input made it think it was
+            # the planner and emit `{"action":"select_skills",...}` JSON instead
+            # of answering / calling the mcp__nd3x tools.
+            _acs = payload.get("_active_conversation_state") or {}
+            _agent_msgs: list = []
+            for _m in (_acs.get("recent_messages") or []):
+                _role = _m.get("role")
+                _content = _m.get("content")
+                if _role in ("user", "assistant") and isinstance(_content, str) and _content.strip():
+                    _agent_msgs.append({"role": _role, "content": _content})
+            # Append the current question unless it's already the last user turn.
+            if not (_agent_msgs and _agent_msgs[-1]["role"] == "user"
+                    and _agent_msgs[-1]["content"].strip() == (question or "").strip()):
+                _agent_msgs.append({"role": "user", "content": question or ""})
+            # Memory injection. The orchestrator already selected the relevant
+            # memories into payload["_planner_memory_context"] (and marked them
+            # injected). The normal planner loop consumes them, but this option-A
+            # agent path did not — so Claude Code chat turns never "remembered".
+            # Feed those memories to the agent as extra instructions.
+            _mem_ctx = payload.get("_planner_memory_context") or {}
+            _mem_lines = []
+            for _mi in (_mem_ctx.get("memories") or []):
+                _c = (_mi.get("content") or "").strip() if isinstance(_mi, dict) else str(_mi).strip()
+                if _c:
+                    _mem_lines.append(f"- {_c}")
+            _mem_block = (
+                "Relevant remembered context about this user/project (from ND3X memory — "
+                "use it when helpful; don't repeat it verbatim):\n" + "\n".join(_mem_lines)
+            ) if _mem_lines else None
+            try:
+                with SessionLocal() as _agent_db:
+                    _agent = ClaudeCodeChatAgent(_agent_db)
+                    # Typed stream: the agent's interim text ('thinking') and its
+                    # tool calls go to the STEPS view via the same event types the
+                    # normal loop uses (agent_narration / tool_call), so no FE
+                    # change is needed. Only the 'answer' event becomes the chat
+                    # reply.
+                    _answer = ""
+                    _narration = list(payload.get("_narration") or [])
+                    async for _ev in _agent.run_stream_events(
+                        user_input=_agent_msgs, model=_cc_model,
+                        skill_names=selected_skill_names,
+                        extra_instructions=_mem_block,
+                    ):
+                        _kind = _ev.get("kind")
+                        if _kind == "answer":
+                            _answer = _ev.get("text") or ""
+                            if progress_cb is not None:
+                                try:
+                                    progress_cb({
+                                        "type": "answer_partial", "turn_id": turn_id,
+                                        "assistant": assistant_name, "partial_answer": _answer,
+                                    })
+                                except Exception:  # noqa: BLE001
+                                    pass
+                        elif _kind == "thinking":
+                            _say = (_ev.get("text") or "").strip()
+                            if _say:
+                                self.trace_fn(
+                                    trace, thread_id=session_id, turn_id=turn_id,
+                                    type="agent_narration", summary=_say,
+                                    data={"assistant": assistant_name, "say": _say},
+                                    progress_cb=progress_cb,
+                                )
+                                _narration.append({"kind": "say", "text": _say, "ts": time.time()})
+                        elif _kind == "tool":
+                            _tool = _ev.get("name") or "tool"
+                            self.trace_fn(
+                                trace, thread_id=session_id, turn_id=turn_id,
+                                type="tool_call", summary=f"Calling {_tool}",
+                                data={"assistant": assistant_name, "tool": _tool},
+                                progress_cb=progress_cb,
+                            )
+                            _narration.append({"kind": "tool", "text": f"Using {_tool}", "ts": time.time()})
+                    payload["_narration"] = _narration
+                # A FULLY schema-valid final plan (planner.schema.json requires
+                # all of these) so plan validation passes — a partial plan makes
+                # the validator retry the "planner" and loop into
+                # plan_validation_failed.
+                plan_resp = SimpleNamespace(text=json.dumps({
+                    "action": "final",
+                    "reason": "Answered by the Claude Code agent.",
+                    "say": "",
+                    "tool_calls": [],
+                    "response_mode": "synthesize_answer",
+                    "search_keywords": [],
+                    "final_answer": _answer,
+                    "downstream_handoff": None,
+                }))
+            except Exception as _cc_exc:  # noqa: BLE001 — surface as a planner error
+                self.trace_fn(
+                    trace, thread_id=session_id, turn_id=turn_id,
+                    type="planner_call_error",
+                    summary="Claude Code chat-agent run failed",
+                    data={"assistant": assistant_name, "model": model,
+                          "error": type(_cc_exc).__name__, "message": str(_cc_exc)[:300]},
+                    progress_cb=progress_cb,
+                )
+                raise
+
         _resolves_openai = getattr(self.openai, "resolves_to_openai", None)
         can_stream_planner = (
-            progress_cb is not None
+            plan_resp is None  # not already answered by the Claude Code agent above
+            and progress_cb is not None
             and not planner_keep_context
             and callable(_resolves_openai)
             and bool(_resolves_openai(model, planner_role))

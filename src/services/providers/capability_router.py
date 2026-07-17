@@ -31,6 +31,13 @@ CHAT_SLOTS = ("chat.planner",)
 ALL_SLOTS = (
     "chat.planner",
     "chat.cognition",
+    # Background agents (agent__dispatch / task__create): the model that drives a
+    # dispatched/background subagent run, SEPARATE from the foreground planner so a
+    # background job can use a different (e.g. cheaper, or truly-parallel cloud)
+    # model. NO FALLBACK: unassigned → dispatch is refused with a clear error (the
+    # assignment is the configuration). A CLI-agent here makes background runs run
+    # in agent mode. A per-call `model` on dispatch overrides this slot.
+    "chat.background",
     # Memory-retrieval decision (advanced, optional): assigned → that model
     # decides per turn whether to retrieve memories; UNASSIGNED → the decision
     # step is OFF entirely (no fallback to the planner model).

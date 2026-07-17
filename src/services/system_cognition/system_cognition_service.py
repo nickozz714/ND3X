@@ -693,6 +693,114 @@ class SystemCognitionService:
         )
         return result
 
+    # ── Fase 3: agent-blackbox cognition ─────────────────────────────────────────
+
+    @staticmethod
+    def _cognition_is_agent_mode() -> bool:
+        """True when the chat.cognition slot resolves to a CLI-agent provider."""
+        try:
+            from db.database import SessionLocal
+            from services.providers.execution_mode import slot_mode
+            with SessionLocal() as db:
+                return slot_mode(db, "chat.cognition") == "agent"
+        except Exception:  # noqa: BLE001 — on lookup failure, use the model pipeline
+            return False
+
+    @staticmethod
+    def _clamp01(value: Any, default: float) -> float:
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return default
+        return max(0.0, min(1.0, v))
+
+    def _agent_memory_record(self, item: Any, thread_id, project_id) -> Optional[MemoryRecord]:
+        if not isinstance(item, dict):
+            return None
+        content = str(item.get("content") or "").strip()
+        if not content:
+            return None
+        tgt = self._resolve_scoped_target(
+            requested_scope=item.get("scope"), fallback_scope=None,
+            thread_id=thread_id, project_id=project_id)
+        return MemoryRecord(
+            type=str(item.get("type") or "note"), content=content,
+            scope=tgt["scope"], thread_id=tgt["thread_id"], project_id=tgt["project_id"],
+            importance=self._clamp01(item.get("importance"), 0.5),
+            metadata_={"source": "agent_cognition"})
+
+    def _agent_belief_record(self, item: Any, thread_id, project_id) -> Optional[BeliefRecord]:
+        if not isinstance(item, dict):
+            return None
+        topic = str(item.get("topic") or "").strip()
+        summary = str(item.get("summary") or "").strip()
+        content = str(item.get("content") or "").strip()
+        if not (topic and (summary or content)):
+            return None
+        tgt = self._resolve_scoped_target(
+            requested_scope=None, fallback_scope=None,
+            thread_id=thread_id, project_id=project_id)
+        return BeliefRecord(
+            topic=topic, summary=summary or None, content=content or summary,
+            domain=(str(item.get("domain")) if item.get("domain") else None),
+            confidence=self._clamp01(item.get("confidence"), 0.5), status="tentative",
+            scope=tgt["scope"], thread_id=tgt["thread_id"], project_id=tgt["project_id"],
+            metadata_={"source": "agent_cognition"})
+
+    def _agent_curiosity_job(self, item: Any, question, answer, thread_id, project_id) -> Optional[CuriosityJob]:
+        if not isinstance(item, dict):
+            return None
+        topic = str(item.get("topic") or "").strip()
+        if not topic:
+            return None
+        return CuriosityJob(
+            topic=topic, reason=str(item.get("reason") or ""),
+            scope=("project" if project_id else "thread"),
+            project_id=project_id, thread_id=thread_id,
+            source_question=question, source_answer=answer,
+            metadata_={"source": "agent_cognition"})
+
+    async def _post_turn_via_agent(self, *, question, answer, thread_id, project_id, turn_id, t0) -> Dict[str, Any]:
+        from db.database import SessionLocal
+        from services.system_cognition.cognition_agent_runner import CognitionAgentRunner
+        try:
+            with SessionLocal() as db:
+                env = await CognitionAgentRunner(db).extract(
+                    question=question, answer=answer, model=self.default_model)
+        except Exception as exc:  # noqa: BLE001 — never let cognition break the turn
+            log.warningx("Agent-cognition extractie mislukt", turn_id=turn_id, error=str(exc))
+            return {"ok": False, "mode": "agent", "elapsed_ms": int((time.time() - t0) * 1000),
+                    "route": {"engine": "agent", "error": str(exc)}, "interpretation": None,
+                    "memory": None, "curiosity": None, "processed_jobs": []}
+
+        saved_mem, saved_bel, queued_cur = [], [], []
+        for m in env.get("memories") or []:
+            rec = self._agent_memory_record(m, thread_id, project_id)
+            if rec is not None:
+                self._attach_memory_embedding(rec)
+                await self.memory_repo.upsert(rec)
+                saved_mem.append(rec.id)
+        for b in env.get("beliefs") or []:
+            rec = self._agent_belief_record(b, thread_id, project_id)
+            if rec is not None:
+                self._attach_belief_embedding(rec)
+                await self.belief_repo.upsert(rec)
+                saved_bel.append(rec.id)
+        for c in env.get("curiosity") or []:
+            job = self._agent_curiosity_job(c, question, answer, thread_id, project_id)
+            if job is not None:
+                await self.curiosity_repo.enqueue(job)
+                queued_cur.append(job.id)
+
+        log.infox("Agent-cognition post_turn afgerond", turn_id=turn_id,
+                  memories=len(saved_mem), beliefs=len(saved_bel), curiosity=len(queued_cur),
+                  decision=env.get("decision"))
+        return {"ok": True, "mode": "agent", "elapsed_ms": int((time.time() - t0) * 1000),
+                "route": {"engine": "agent", "decision": env.get("decision")},
+                "interpretation": None,
+                "memory": {"saved_ids": saved_mem, "saved_belief_ids": saved_bel},
+                "curiosity": {"queued_ids": queued_cur}, "processed_jobs": []}
+
     async def post_turn(
             self,
             *,
@@ -719,6 +827,14 @@ class SystemCognitionService:
         )
         trace = trace or []
         t0 = time.time()
+
+        # Fase 3 — agent blackbox: when the cognition slot resolves to a CLI-agent
+        # provider, do the whole decide+extract in ONE call and persist, instead of
+        # the multi-step model pipeline below (which a CLI agent can't schema-enforce).
+        if self._cognition_is_agent_mode():
+            return await self._post_turn_via_agent(
+                question=question, answer=answer, thread_id=thread_id,
+                project_id=project_id, turn_id=turn_id, t0=t0)
 
         existing_context = await self.pre_context(question=question, thread_id=thread_id, project_id=project_id)
         log.debugx(

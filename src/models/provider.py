@@ -39,6 +39,13 @@ PROVIDER_TYPES = (
     "ollama",
     "gemini",
     "voyage",
+    # Headless Claude Code CLI on the local machine; auth = `claude setup-token`
+    # OAuth token (subscription), stored in api_key_encrypted like other keys.
+    "claude_code",
+    # Azure AI Foundry (Microsoft Foundry Models) via the v1 OpenAI-compatible
+    # route (https://<resource>.openai.azure.com/openai/v1). model_id = the
+    # DEPLOYMENT name; auth = Azure API key in api_key_encrypted.
+    "azure_foundry",
 )
 
 # Capability identifiers a ProviderModel can serve.
@@ -49,6 +56,7 @@ CAPABILITIES = ("chat", "embeddings", "transcription", "tts", "realtime", "image
 ROUTING_SLOTS = (
     "chat.planner",
     "chat.cognition",
+    "chat.background",
     "chat.auto_decision",
     "meeting.action_detector",
     "embeddings",

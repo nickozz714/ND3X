@@ -33,8 +33,12 @@ class MCPServer(Base):
     created_at = Column(DateTime, nullable=False)
     updated_at = Column(DateTime, nullable=False)
 
-    tools        = relationship("Tool", back_populates="mcp_server")
-    auth_configs = relationship("MCPServerAuth", back_populates="mcp_server")
+    # cascade so deleting a server removes its tools + auth rows. Tool.mcp_server_id
+    # is NOT NULL with no DB-level ON DELETE, so without this SQLAlchemy tries to
+    # null the FK on delete → IntegrityError ("can't delete a server that has
+    # tools"). delete-orphan makes the ORM issue explicit child DELETEs instead.
+    tools        = relationship("Tool", back_populates="mcp_server", cascade="all, delete-orphan")
+    auth_configs = relationship("MCPServerAuth", back_populates="mcp_server", cascade="all, delete-orphan")
 
 
 class MCPServerAuth(Base):
