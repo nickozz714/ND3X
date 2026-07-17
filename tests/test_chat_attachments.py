@@ -38,7 +38,7 @@ async def test_text_attachment_is_thread_scoped_and_context_bounded(tmp_path):
         files=[UploadFile(filename="notes.txt", file=BytesIO(b"x" * (MAX_TEXT_CHARS_PER_FILE + 100)))],
     )
 
-    question, records = await service.enrich_question(
+    question, records, _blocks = await service.enrich_question(
         question="Summarize this",
         thread_id="thread-a",
         attachment_ids=[uploaded[0]["id"]],
@@ -74,7 +74,7 @@ async def test_image_is_described_once_instead_of_putting_base64_in_prompt(tmp_p
     )
     llm = _VisionLLM()
 
-    question, _ = await service.enrich_question(
+    question, _, blocks = await service.enrich_question(
         question="What went wrong?",
         thread_id="thread-a",
         attachment_ids=[uploaded[0]["id"]],
@@ -85,6 +85,37 @@ async def test_image_is_described_once_instead_of_putting_base64_in_prompt(tmp_p
     assert "red error banner with code E42" in question
     assert "base64" not in question
     assert llm.input[0]["content"][1]["type"] == "input_image"
+    assert blocks == []  # text-only planner → describe path, no native blocks
+
+
+@pytest.mark.asyncio
+async def test_image_rides_natively_when_planner_model_can_see(tmp_path, monkeypatch):
+    # When the model that will run the planner loop is itself vision-capable,
+    # the image is passed as native content blocks and NO describe call is made.
+    from services.providers.registry_service import ProviderRegistryService
+    monkeypatch.setattr(
+        ProviderRegistryService, "planner_native_vision_model", lambda self, m=None: "qwen2.5vl:7b"
+    )
+    service = ChatAttachmentService(tmp_path)
+    uploaded = await service.upload(
+        thread_id="thread-a",
+        files=[UploadFile(filename="screen.png", file=BytesIO(b"fake-png"), headers={"content-type": "image/png"})],
+    )
+    llm = _VisionLLM()
+
+    question, _, blocks = await service.enrich_question(
+        question="What went wrong?",
+        thread_id="thread-a",
+        attachment_ids=[uploaded[0]["id"]],
+        model="qwen2.5vl:7b",
+        llm_service=llm,
+    )
+
+    assert llm.input is None  # the describe LLM call was skipped
+    assert len(blocks) == 1 and blocks[0]["type"] == "input_image"
+    assert blocks[0]["image_url"].startswith("data:image/png;base64,")
+    assert "screen.png" in question and "directly visible" in question
+    assert "base64," not in question  # pixels ride the blocks, never the prompt
 
 
 @pytest.mark.asyncio

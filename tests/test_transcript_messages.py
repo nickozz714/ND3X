@@ -34,3 +34,28 @@ def test_replays_accumulated_hops_as_turns():
     assert "Continue" in msgs[4]["content"]             # next-action nudge
     # every content is a plain string (works on OpenAI / Anthropic / local)
     assert all(isinstance(m["content"], str) for m in msgs)
+
+
+def test_native_image_blocks_ride_the_anchor_turn():
+    blocks = [{"type": "input_image", "image_url": "data:image/png;base64,QUJD"}]
+
+    # First hop: the plan prompt becomes a multimodal user turn.
+    msgs = _build_transcript_messages(
+        _FakeAssistant(), "q", {"_attachment_image_blocks": blocks}, "PLAN_PROMPT"
+    )
+    assert msgs == [{
+        "role": "user",
+        "content": [{"type": "input_text", "text": "PLAN_PROMPT"}, blocks[0]],
+    }]
+
+    # Later hops: only the anchor is multimodal (the transcript is rebuilt
+    # statelessly per hop); tool/observation turns stay plain strings.
+    payload = {
+        "_attachment_image_blocks": blocks,
+        "_acc_tool_calls": [{"tool": "text_search", "args": {"q": "x"}}],
+        "_acc_tool_results": [{"tool": "text_search", "status": "ok", "summary": "found-it"}],
+    }
+    msgs = _build_transcript_messages(_FakeAssistant(), "q", payload, "PLAN_PROMPT")
+    assert msgs[0]["content"][0] == {"type": "input_text", "text": "ANCHOR:q"}
+    assert msgs[0]["content"][1]["type"] == "input_image"
+    assert all(isinstance(m["content"], str) for m in msgs[1:])

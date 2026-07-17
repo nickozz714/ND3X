@@ -143,8 +143,9 @@ async def _prepare_ask_attachments(
         llm_service = build_llm_router(openai, db)
         enriched = question
         attachments: list[dict] = []
+        image_blocks: list[dict] = []
         if attachment_ids:
-            enriched, attachments = await attachment_service.enrich_question(
+            enriched, attachments, image_blocks = await attachment_service.enrich_question(
                 question=question,
                 thread_id=thread_id,
                 attachment_ids=attachment_ids,
@@ -160,6 +161,10 @@ async def _prepare_ask_attachments(
         db.close()
     if attachments:
         payload["attachments"] = attachments
+    if image_blocks:
+        # Native multimodal passthrough: the planner model can see — the
+        # pipeline attaches these blocks to the planner's user turn.
+        payload["_attachment_image_blocks"] = image_blocks
     native_resources = attachment_service.native_resources(thread_id=thread_id)
     if attachment_ids:
         anthropic_files = attachment_service.current_anthropic_files(

@@ -104,7 +104,7 @@ def _json(value: Any) -> str:
 
 def _build_transcript_messages(
     assistant: Any, question: str, payload: Dict[str, Any], plan_prompt: str
-) -> List[Dict[str, str]]:
+) -> List[Dict[str, Any]]:
     """Build a structured conversation for the transcript path (every provider when the
     OpenAI server-side session is off).
 
@@ -117,16 +117,25 @@ def _build_transcript_messages(
     acc_calls = payload.get("_acc_tool_calls") or []
     acc_results = payload.get("_acc_tool_results") or []
     acc_docs = payload.get("_acc_docs") or []
+    image_blocks = payload.get("_attachment_image_blocks") or []
+
+    def _anchor_turn(text: str) -> Dict[str, Any]:
+        # Native multimodal: this turn's images ride on the anchor user message
+        # every hop — the transcript is rebuilt statelessly per hop, so the
+        # model must receive the pixels each time it is called.
+        if image_blocks:
+            return {"role": "user", "content": [{"type": "input_text", "text": text}, *image_blocks]}
+        return {"role": "user", "content": text}
 
     # First hop (nothing accumulated yet): the plan_prompt already IS the full anchor.
     if not (acc_calls or acc_results or acc_docs):
-        return [{"role": "user", "content": plan_prompt}]
+        return [_anchor_turn(plan_prompt)]
 
     anchor_payload = dict(payload)
     anchor_payload["_history_anchor"] = True
     anchor = assistant.prompt(question=question, **anchor_payload)
 
-    messages: List[Dict[str, str]] = [{"role": "user", "content": anchor}]
+    messages: List[Dict[str, Any]] = [_anchor_turn(anchor)]
     for i in range(max(len(acc_calls), len(acc_results))):
         if i < len(acc_calls):
             messages.append({
@@ -948,6 +957,15 @@ class AssistantPipelineRunner:
         #   loop behave identically on OpenAI / Anthropic / local.
         if supports_session:
             plan_input: Any = plan_prompt
+            image_blocks = planner_payload.get("_attachment_image_blocks") or []
+            if image_blocks and not is_planner_continuation:
+                # Native multimodal on the server-side-session path: the images
+                # ride on the first call of the turn; the Responses session
+                # retains them server-side for the later hops.
+                plan_input = [{
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": plan_prompt}, *image_blocks],
+                }]
         else:
             plan_input = _build_transcript_messages(assistant, question, planner_payload, plan_prompt)
 
