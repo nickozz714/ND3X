@@ -91,17 +91,31 @@ def discover_models(
             return {"models": _shape(ids, t)}
 
         if t == "azure_foundry":
-            # v1 OpenAI-compatible route: GET {base}/models lists the resource's
-            # deployments (ids = deployment names). The v1 endpoint accepts both
-            # auth headers; send both so key auth works regardless of gateway.
+            # Prefer the resource's DEPLOYMENTS: their ids are the deployment
+            # names — exactly what ND3X must register as model_id. (The v1
+            # {base}/models route returns the whole Foundry model CATALOG, not
+            # what this resource can serve; live-verified 2026-07-17.) The
+            # endpoint accepts both auth headers; send both.
             from services.providers.azure_foundry_provider import normalize_foundry_base_url
             if not api_key:
                 return {"models": [], "error": "No API key set for this provider."}
             base = (normalize_foundry_base_url(base_url) or "").rstrip("/")
             if not base:
                 return {"models": [], "error": "No base URL set for this provider."}
-            r = httpx.get(f"{base}/models", timeout=10.0,
-                          headers={"Authorization": f"Bearer {api_key}", "api-key": api_key})
+            headers = {"Authorization": f"Bearer {api_key}", "api-key": api_key}
+            root = base[: -len("/openai/v1")] if base.endswith("/openai/v1") else base
+            try:
+                r = httpx.get(f"{root}/openai/deployments", timeout=10.0, headers=headers,
+                              params={"api-version": "2023-03-15-preview"})
+                r.raise_for_status()
+                items = r.json().get("data") or []
+                ids = [i.get("id") for i in items if isinstance(i, dict) and i.get("id")]
+                if ids:
+                    return {"models": _shape(ids, t)}
+            except Exception as exc:  # noqa: BLE001 — fall back to the v1 catalog
+                log.warningx("Foundry deployments-listing mislukt; val terug op catalogus",
+                             error=str(exc))
+            r = httpx.get(f"{base}/models", timeout=10.0, headers=headers)
             r.raise_for_status()
             data = r.json()
             items = data.get("data") if isinstance(data, dict) else data

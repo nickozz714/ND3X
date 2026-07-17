@@ -334,12 +334,22 @@ Conform het slot-principe: géén hardcoded modellen, de toewijzing ís de confi
 (`role_to_slot`), `src/services/builtin/tools/agent_tools.py`, `src/services/builtin/tools/background_tasks.py`,
 `src/services/assistants/ask_job_callbacks.py`, FE `lovely-landing-project/src/.../AIModelsSection.tsx`.
 
-## Azure AI Foundry als LLM-provider (`azure_foundry`)
-_Aangedragen 2026-07-17 (Nick). Typenaam `azure_foundry` beslist 2026-07-17. **Fase 1+2 gebouwd
-2026-07-17** (adapter, factory, preset, capability-helpers, health, discovery, docs; 12 unit-tests,
-suite 689 groen). **Vink dit item NIET af** — de live smoke op Nicks Foundry-resource (chat +
-streaming + embeddings + Discover, en één niet-OpenAI-deployment) wacht op endpoint + API-key van
-Nick. Fase 3 (Entra ID keyless) blijft optioneel/ongebouwd._
+## Azure AI Foundry als LLM-provider (`azure_foundry`) — ✅ OPGELOST (2026-07-17)
+_Aangedragen + beslist + gebouwd + **live geverifieerd** 2026-07-17. Fase 1+2 af; suite 694 groen._
+
+**Live smoke (echte Azure-resource, 2026-07-17):** resource `nd3x-foundry-weu` aangemaakt in de
+Beeminds Playground-sub (rg `rg-nd3x-ai`, West Europe, kind AIServices) met 3 deployments:
+`gpt-5-mini`, `deepseek-v3-2` (DeepSeek-V3.2) en `text-embedding-3-small`. Via de ND3X-adapters
+geverifieerd: chat ✓, streaming ✓, **niet-OpenAI-model (DeepSeek) ✓**, embeddings ✓, Discover ✓
+(alle drie endpoint-aliassen — cognitiveservices/openai/services.ai — serveren de v1-route).
+Discover verbeterd n.a.v. de smoke: leest eerst de échte **deployments**
+(`/openai/deployments?api-version=2023-03-15-preview` — ids = deployment-namen), v1-catalogus
+alleen als fallback (die geeft het hele Foundry-aanbod, niet de resource-deployments).
+
+**Nog te doen door Nick zelf:** provider registreren in de draaiende ND3X-instantie (AI Models →
+Cloud → Azure AI Foundry: base URL `https://nd3x-foundry-weu.cognitiveservices.azure.com` + key
+uit `az cognitiveservices account keys list -g rg-nd3x-ai -n nd3x-foundry-weu`) en desgewenst een
+slot toewijzen. **Fase 3 (Entra ID keyless) blijft optioneel/ongebouwd.**
 
 **Doel:** Azure AI Foundry-deployments als volwaardige provider in de registry, zodat álle
 Foundry-modellen (Azure OpenAI-modellen én DeepSeek/Grok/MAI/Llama/Phi/Mistral) toewijsbaar zijn

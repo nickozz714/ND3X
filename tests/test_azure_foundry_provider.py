@@ -179,32 +179,58 @@ def test_web_search_default_off_override_wins():
     assert effective_web_search("azure_foundry", "gpt-4o-deploy", True) is True
 
 
-# ── model discovery (deployments via GET {base}/models) ──────────────────────
-def test_discovery_lists_deployments(monkeypatch):
+# ── model discovery (deployments first, v1 catalog as fallback) ──────────────
+def test_discovery_prefers_deployments(monkeypatch):
     from services.providers import model_catalog as mc
     from services.providers.model_discovery import discover_models
     monkeypatch.setattr(mc, "fetch_catalog", lambda **kw: {})
 
     captured = {}
 
-    def fake_get(url, timeout=None, headers=None):
+    def fake_get(url, timeout=None, headers=None, params=None):
         captured["url"] = url
         captured["headers"] = headers or {}
+        captured["params"] = params or {}
+        # ids = DEPLOYMENT names (what ND3X registers as model_id)
         return httpx.Response(
-            200, json={"data": [{"id": "gpt-4o-deploy"}, {"id": "text-embedding-3-large"}]},
+            200, json={"data": [{"id": "gpt-4o-deploy", "model": "gpt-4o"},
+                                {"id": "text-embedding-3-large", "model": "text-embedding-3-large"}]},
             request=httpx.Request("GET", url),
         )
 
     monkeypatch.setattr(httpx, "get", fake_get)
     out = discover_models(provider_type="azure_foundry",
                           base_url="https://res.openai.azure.com", api_key="k")
-    assert captured["url"] == "https://res.openai.azure.com/openai/v1/models"
-    # v1 accepts both auth headers — discovery sends both
+    assert captured["url"] == "https://res.openai.azure.com/openai/deployments"
+    assert captured["params"]["api-version"] == "2023-03-15-preview"
+    # the endpoint accepts both auth headers — discovery sends both
     assert captured["headers"]["Authorization"] == "Bearer k"
     assert captured["headers"]["api-key"] == "k"
     caps = {m["model_id"]: m["capability"] for m in out["models"]}
     assert caps["gpt-4o-deploy"] == "chat"
     assert caps["text-embedding-3-large"] == "embeddings"
+
+
+def test_discovery_falls_back_to_v1_catalog(monkeypatch):
+    from services.providers import model_catalog as mc
+    from services.providers.model_discovery import discover_models
+    monkeypatch.setattr(mc, "fetch_catalog", lambda **kw: {})
+
+    urls = []
+
+    def fake_get(url, timeout=None, headers=None, params=None):
+        urls.append(url)
+        if url.endswith("/openai/deployments"):  # legacy route unavailable
+            return httpx.Response(404, json={}, request=httpx.Request("GET", url))
+        return httpx.Response(200, json={"data": [{"id": "DeepSeek-V3.2"}]},
+                              request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    out = discover_models(provider_type="azure_foundry",
+                          base_url="https://res.openai.azure.com", api_key="k")
+    assert urls == ["https://res.openai.azure.com/openai/deployments",
+                    "https://res.openai.azure.com/openai/v1/models"]
+    assert [m["model_id"] for m in out["models"]] == ["DeepSeek-V3.2"]
 
 
 def test_discovery_requires_key_and_base_url():
