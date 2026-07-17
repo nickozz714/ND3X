@@ -90,6 +90,24 @@ def discover_models(
             ids = [m.get("name") for m in (r.json().get("models") or []) if m.get("name")]
             return {"models": _shape(ids, t)}
 
+        if t == "azure_foundry":
+            # v1 OpenAI-compatible route: GET {base}/models lists the resource's
+            # deployments (ids = deployment names). The v1 endpoint accepts both
+            # auth headers; send both so key auth works regardless of gateway.
+            from services.providers.azure_foundry_provider import normalize_foundry_base_url
+            if not api_key:
+                return {"models": [], "error": "No API key set for this provider."}
+            base = (normalize_foundry_base_url(base_url) or "").rstrip("/")
+            if not base:
+                return {"models": [], "error": "No base URL set for this provider."}
+            r = httpx.get(f"{base}/models", timeout=10.0,
+                          headers={"Authorization": f"Bearer {api_key}", "api-key": api_key})
+            r.raise_for_status()
+            data = r.json()
+            items = data.get("data") if isinstance(data, dict) else data
+            ids = [m.get("id") if isinstance(m, dict) else m for m in (items or [])]
+            return {"models": _shape([i for i in ids if i], t)}
+
         # openai + openai_compatible (+ gemini/voyage compatible endpoints)
         base = (base_url or _OPENAI_BASE).rstrip("/")
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}

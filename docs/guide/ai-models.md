@@ -17,6 +17,18 @@ realtime) — you can **manually override** a model's capability here if it was
 auto-classified wrong (e.g. a realtime model mislabelled as chat). The OpenAI key entered
 here is also what the realtime voice mint uses.
 
+### Azure AI Foundry
+
+The **Azure AI Foundry** preset connects an Azure Foundry (or Azure OpenAI) resource through
+its v1 OpenAI-compatible API. Three things to know:
+
+- **Base URL** = your resource endpoint, e.g. `https://<resource>.openai.azure.com` (the
+  `/openai/v1` route is appended automatically; `.services.ai.azure.com` also works).
+- **Model id = your DEPLOYMENT name**, not the model name — deploy a model in the Foundry
+  portal first, then register that deployment name here (**Discover** lists them).
+- **API key** = the Azure resource key. This covers Azure OpenAI models (GPT-4o/4.1/
+  o-series) and Azure-sold open models (DeepSeek, Grok, Llama, Phi, Mistral) alike.
+
 ## Local
 
 Shows your machine's hardware, **recommends** models that fit, and can **deploy** a local

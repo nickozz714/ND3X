@@ -335,8 +335,11 @@ Conform het slot-principe: géén hardcoded modellen, de toewijzing ís de confi
 `src/services/assistants/ask_job_callbacks.py`, FE `lovely-landing-project/src/.../AIModelsSection.tsx`.
 
 ## Azure AI Foundry als LLM-provider (`azure_foundry`)
-_Aangedragen 2026-07-17 (Nick). Uitgebreid onderzoek gedaan (code + extern, Microsoft Learn);
-typenaam `azure_foundry` beslist 2026-07-17; nog niet gebouwd._
+_Aangedragen 2026-07-17 (Nick). Typenaam `azure_foundry` beslist 2026-07-17. **Fase 1+2 gebouwd
+2026-07-17** (adapter, factory, preset, capability-helpers, health, discovery, docs; 12 unit-tests,
+suite 689 groen). **Vink dit item NIET af** — de live smoke op Nicks Foundry-resource (chat +
+streaming + embeddings + Discover, en één niet-OpenAI-deployment) wacht op endpoint + API-key van
+Nick. Fase 3 (Entra ID keyless) blijft optioneel/ongebouwd._
 
 **Doel:** Azure AI Foundry-deployments als volwaardige provider in de registry, zodat álle
 Foundry-modellen (Azure OpenAI-modellen én DeepSeek/Grok/MAI/Llama/Phi/Mistral) toewijsbaar zijn

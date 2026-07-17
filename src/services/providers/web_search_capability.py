@@ -30,6 +30,12 @@ def provider_supports_web_search(provider_type: Optional[str], model_id: Optiona
         # config choice, enforced in web_search_service; the per-model
         # "web: on/off" toggle here still wins as override.
         return True
+    if p == "azure_foundry":
+        # The Foundry adapter speaks Chat Completions; a native web_search tool
+        # is not guaranteed across deployments, so the curated default is OFF.
+        # A per-model override still wins (web_search_service then tries the
+        # OpenAI-style search against the Foundry base_url).
+        return False
     return False  # openai-compatible / local / unknown → no native web search
 
 

@@ -82,6 +82,15 @@ def _build_chat_provider(p: Provider, api_key: Optional[str], default_model: str
         return OllamaChatProvider(base_url=p.base_url, default_model=default_model, model_ctx=model_ctx)
     if t == "openai_compatible":
         return OpenAICompatibleChatProvider(base_url=p.base_url, api_key=api_key, default_model=default_model)
+    if t == "azure_foundry":
+        # Azure AI Foundry via the v1 OpenAI-compatible route. model = deployment
+        # name. Phase 1 auth = Azure API key (Entra ID keyless is a later phase),
+        # so a missing key is a config error, not a call-time 401.
+        if not api_key:
+            log.warningx("Azure Foundry provider zonder API key", provider_id=p.id)
+            return None
+        from services.providers.azure_foundry_provider import AzureFoundryChatProvider
+        return AzureFoundryChatProvider(base_url=p.base_url, api_key=api_key, default_model=default_model)
     if t == "openai":
         return OpenAIChatProvider(openai_service)
     if t == "gemini":
@@ -131,6 +140,12 @@ def _build_embedding_provider(p: Provider, api_key: Optional[str], default_model
     t = (p.provider_type or "").strip()
     if t in ("openai_compatible", "ollama", "voyage"):
         return OpenAICompatibleEmbeddingProvider(base_url=p.base_url, api_key=api_key, default_model=default_model)
+    if t == "azure_foundry":
+        if not api_key:
+            log.warningx("Azure Foundry embedding provider zonder API key", provider_id=p.id)
+            return None
+        from services.providers.azure_foundry_provider import AzureFoundryEmbeddingProvider
+        return AzureFoundryEmbeddingProvider(base_url=p.base_url, api_key=api_key, default_model=default_model)
     if t == "gemini" and api_key:
         return GeminiEmbeddingProvider(api_key=api_key, default_model=default_model)
     if t == "openai":

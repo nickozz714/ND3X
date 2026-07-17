@@ -50,6 +50,16 @@ async def check_provider(
         return {"status": "ok" if has_api_key else "unconfigured",
                 "detail": "API key present" if has_api_key else "no API key"}
 
+    if t == "azure_foundry":
+        # Keyed cloud provider that ALSO needs a per-resource endpoint. No
+        # unauthenticated probe exists (the v1 route 401s without a key), so
+        # health = both config pieces present.
+        if not base_url:
+            return {"status": "unconfigured", "detail": "missing base_url"}
+        if not has_api_key:
+            return {"status": "unconfigured", "detail": "no API key"}
+        return {"status": "ok", "detail": "endpoint + API key present"}
+
     if t == "claude_code":
         # Local CLI — healthy when the binary is on PATH; auth (setup-token or
         # host login) only surfaces at call time. A custom cli_path lives in

@@ -53,8 +53,16 @@ def search(db: Session, query: str, *, max_results: int = 5) -> Dict[str, Any]:
 
     model = resolved.model_id
     try:
-        if ptype in ("openai", "openai_compatible", "openai-compatible", "azure_openai"):
-            return _openai(key, model, resolved.base_url, query)
+        if ptype in ("openai", "openai_compatible", "openai-compatible", "azure_openai", "azure_foundry"):
+            # Foundry only reaches here via an explicit per-model "web: on"
+            # override (curated default is off); its v1 route also serves the
+            # Responses API, so the OpenAI-style search works when the
+            # deployment supports the web_search tool.
+            base = resolved.base_url
+            if ptype == "azure_foundry":
+                from services.providers.azure_foundry_provider import normalize_foundry_base_url
+                base = normalize_foundry_base_url(base)
+            return _openai(key, model, base, query)
         if ptype == "anthropic":
             return _anthropic(key, model, query, max_results)
         if ptype in ("gemini", "google", "google_genai"):

@@ -50,6 +50,16 @@ PRESETS = [
         "needs_base_url": False, "is_local": False, "capabilities": ["embeddings"],
     },
     {
+        "key": "azure_foundry", "provider_type": "azure_foundry", "label": "Azure AI Foundry",
+        "description": "Azure-hosted models via the v1 OpenAI-compatible API — Azure OpenAI "
+                       "(GPT-4o/4.1/o-series) plus DeepSeek, Grok, Llama, Phi and Mistral "
+                       "deployments. Base URL = your resource endpoint "
+                       "(https://<resource>.openai.azure.com — /openai/v1 is added "
+                       "automatically). Model id = your DEPLOYMENT name, not the model name.",
+        "base_url": "", "api_key_url": "https://ai.azure.com",
+        "needs_base_url": True, "is_local": False, "capabilities": ["chat", "embeddings"],
+    },
+    {
         "key": "ollama_cloud", "provider_type": "openai_compatible", "label": "Ollama Cloud (Llama)",
         "description": "Cloud-hosted Llama & other open models on a monthly credit plan — "
                        "often cheaper than per-token APIs.",
