@@ -1,7 +1,11 @@
 # ND3X — TODO
 
 ## Claude Code agent: dynamische ND3X-context-manifest (pinpointed)
-_Aangedragen 2026-07-11. Kandidaat voor een nachtrun. Onderzoek is af; bouwen nog niet._
+_Aangedragen 2026-07-11. ✅ **GEBOUWD**: `services/providers/nd3x_agent_context.py`
+(`build_nd3x_context_block`) — verbonden MCP-servers bij naam + dynamische skill-catalogus (enabled,
+niet-system/runtime) + skill_files_root van geselecteerde skills; bewust GÉÉN per-tool-manifest. Gewired
+in chat (`claude_code_chat_agent.py`) én workflow (`claude_code_operation_runner.py`). Getest
+(tests/test_nd3x_agent_context.py, groen)._
 
 **Doel:** de wereld-context die de Claude Code-agent krijgt (chat + workflow) dynamisch uit
 de DB opbouwen — net als de orchestrator's `PromptBuilder` — maar toegespitst op Claude Code,
@@ -27,8 +31,13 @@ preamble; beide gaan `build_nd3x_agent_context(db)` aanroepen (chat-agent heeft 
 runner `self.db`). Selectie: geselecteerde skills volledig (instructie + files_root), de rest
 als lichte catalogus. Let op de twee betekenissen van "skill" (ND3X vs Claude Code's eigen).
 
-## HABIT4T — smart-home MCP-server (TADO + TOSOT + HUE + TUYA) — STANDALONE
-_Aangedragen 2026-07-11. **Standalone product, BUITEN de ND3X-repos** — eigen map + eigen git-repo._
+## HABIT4T — smart-home MCP-server (TADO + TOSOT + HUE + TUYA) — ✅ GEBOUWD (= Home-Service)
+_Aangedragen 2026-07-11. **Standalone product, BUITEN de ND3X-repos.** Gebouwd + live gedeployed als
+`../Home-Service/` (private repo nickozz714/Home-Service) — véél verder dan de oorspronkelijke spec:
+5 vendors live (tado/gree/tuya/roborock/hue), energie-integraties (HomeWizard/forecast/weer),
+Tapo-camera + lokale vision, camera-tijdlijn, "Zie → Doe"-regels, gezichtsherkenning, web-GUI, MCP-
+pariteit. Draait intern op de huisserver. Echte-apparaat-verificatie is met Nick gedaan. Dit item
+verwijst naar de oude werknaam; het echte werk staat in de Home-Service-worklog._
 
 > ⚠️ **NACHTRUN-MODUS: ALLEEN BOUWEN (Nick, 2026-07-11).** Bouw in `../HABIT4T/` de codebase, adapters,
 > trait-model, MCP-server, registry, tools, `.env.example`, README/Dockerfile en **mock-tests** (fake
@@ -74,8 +83,11 @@ Gekozen + gebouwd: gateway **delegeert** tool-executie naar de hoofdserver (inte
 E2E bewezen (200). Zie worklog.
 
 ## Gegeneraliseerd "agent-mode" framework voor CLI-agent-providers (Claude Code, later Codex, …)
-_Aangedragen 2026-07-11 (Nick). Onderzoek gedaan; ontwerp, nog niet gebouwd. Overkoepelt het
-cognition-item hieronder._
+_Aangedragen 2026-07-11 (Nick). ✅ **Fase 0 t/m 5 GEBOUWD** (commits e4cd67f→9dc5f97): is_cli_agent-
+capability + slot_mode + CAP_CLASS, gedeelde CliAgentRunner-base, capability-based dispatch +
+no-fallback + modaliteit-guard, cognition als agent-target (zie item hieronder), decision-slots als
+agent-modus, en de UI/execution_mode-afronding. Het gedetailleerde plan hieronder is historisch
+(referentie); de kern staat. Eventuele losse polish kan als nieuw, klein item terugkomen._
 
 **Kernmodel (Nick, 2026-07-11) — TWEE ASSEN:**
 
@@ -234,7 +246,11 @@ live smoke. (2) envelope-parse moet tolerant blijven (`_parse_envelope` bestaat 
 ook server-side afdwingen, niet alleen FE. (4) experimenteer-budget bewaken (account-limieten).
 
 ## Claude Code als "blackbox" cognition-pad (agent doet memory/belief-extractie zelf)
-_Aangedragen 2026-07-11 (Nick). Onderzoek gedaan; ontwerp, nog niet gebouwd._
+_Aangedragen 2026-07-11 (Nick). ✅ **GEBOUWD** (commit a3b997e, agent-mode Fase 3):
+`services/system_cognition/cognition_agent_runner.py` (CliAgentRunner-subclass) + dispatcher-tak;
+wanneer de cognition-slot een CLI-agent is draait het blackbox-pad (agent beslist + extraheert
+memory/belief/curiosity in één pass, envelope wordt gepersisteerd), anders de bestaande structured
+pijplijn, leeg = uit. Getest (tests/test_cognition_agent.py, groen)._
 
 **Context/bevinding:** cognition draait nu via `openai_service.ask_orchestration_async(json_schema=…)`
 op de slots **chat.cognition** + **chat.memory_decision** — een structured-output pijplijn met
@@ -268,19 +284,36 @@ orchestrator persisteert het resultaat alleen nog (DB) voor injectie in een volg
 Aandachtspunten: de instructie moet de memory/belief-criteria bevatten (wat de router nu doet:
 "durable preference/rule/decision" vs "volatile lookup"); dedupe tegen bestaande memories; kosten.
 
-## Skills-overzicht: skills met niet-bestaande tools ook selecteerbaar maken
-_Aangedragen 2026-07-11._
-In het skills-overzicht wil Nick ook skills kunnen **selecteren** die één of meer tools hebben
-die niet meer bestaan (nu blijkbaar geblokkeerd/uitgegrijsd). Onderzoek: waar wordt selecteerbaarheid
-bepaald (FE skills-overzicht + BE skill-validatie, bv. `_assert_skill_file_list_allowed` /
-skill_tool-relaties)? Toestaan dat een skill met ontbrekende tools tóch selecteerbaar is —
-ontbrekende tools netjes negeren/markeren i.p.v. de hele skill blokkeren (graceful degradation).
-Denk aan: skill-tool-koppelingen naar verwijderde `Tool`-rows, FE-disabled-state, en of de
-orchestrator/agent robuust omgaat met een geselecteerde skill waarvan een tool weg is.
+## Skills-overzicht: skills met niet-bestaande tools ook selecteerbaar maken — ✅ ONDERZOCHT (al graceful)
+_Aangedragen 2026-07-11. Onderzocht + geverifieerd 2026-07-17: **er is geen blokkade** — het gedrag is
+al " negeer de ontbrekende tools, hou de skill"._
+Bevinding (alle relevante lagen nagelopen): `skill_tool` heeft `ondelete=CASCADE` én
+`SkillToolRepository.get_for_skill` doet een **inner join op Tool**, dus een verwijderde tool laat nooit
+een dangling-referentie achter — de tool valt gewoon weg. Runtime laadt met `enabled_only=True` (missing
+én disabled tools worden overgeslagen). `render_skill_catalog` en de router laten een skill toe op
+**enabled-status + naam**, nooit op "heeft de tools nog". FE-overzicht (SkillsSection/AssistantSkillsPanel)
+blokkeert niets op tool-basis (er is enkel een "Without tools"-filter). Een skill met 0 tools is boven-
+dien legitiem (instructie/file-only), dus een "kapot"-markering zou juist misleiden. **Conclusie:** geen
+productiewijziging nodig; regressietest toegevoegd (`tests/test_skill_missing_tools_graceful.py`) die dit
+vastzet: missing (dangling link) + disabled tool → runtime houdt alleen de live enabled tool; een
+toolloze skill blijft in de selecteerbare catalogus.
 
-## Background Agents dispatchen met een eigen, instelbaar orchestrator-model (slot `chat.background`)
-_Aangedragen 2026-07-17 (Nick). Uitgebreid onderzoek gedaan (code); keuzes met Nick beslist
-2026-07-17 (no-fallback); nog niet gebouwd. Sluit aan op het agent-mode-framework-item hierboven._
+## Background Agents dispatchen met een eigen, instelbaar orchestrator-model (slot `chat.background`) — ✅ GEBOUWD (2026-07-17)
+_Aangedragen + beslist + gebouwd 2026-07-17 (commit 56c683c). Fase 1 (slot + resolutie + no-fallback)
+af; suite 703 groen._
+
+**Gebouwd:** nieuw OUTSOURCEABLE slot `chat.background` (capability_router.ALL_SLOTS + execution_mode.
+CAP_CLASS + models.provider.ROUTING_SLOTS). `agent_tools.resolve_background_model()` (per-call model >
+slot > **weigeren**). Gate in `agent__dispatch` (ná de depth-guard) en `task__create` (vóór het spawnen,
+fail-fast). Het opgeloste model wordt de `forced_model` van de subagent-run, dus de hele background-run
+draait erop — en als het een CLI-agent-model is draait de background-run **automatisch in agent-modus**
+(Fase 2 uit het agent-mode-framework). FE: ROUTING_SLOTS + SLOT_HINTS (Agent-groep, advanced).
+docs/guide/agent.md bijgewerkt. Tests: tests/test_background_slot.py.
+**Uitrol-notitie (belangrijk):** dit is een gedragswijziging — `agent__dispatch`/`task__create` weigeren
+nu tot `chat.background` is toegewezen (of een `model` wordt meegegeven). Bewust, no-fallback; staat in
+de foutmelding + docs. Nick moet dus in AI Models → Routing een model op **Background agents** zetten.
+
+_Oorspronkelijk onderzoek + ontwerp hieronder (referentie)._
 
 **Doel:** background agents kunnen dispatchen (fire-and-forget subagent-runs) waarbij instelbaar
 is **welk model de orchestrator van zo'n background run aandrijft** — los van het voorgrond-model.
