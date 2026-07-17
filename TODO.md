@@ -277,3 +277,128 @@ skill_tool-relaties)? Toestaan dat een skill met ontbrekende tools tóch selecte
 ontbrekende tools netjes negeren/markeren i.p.v. de hele skill blokkeren (graceful degradation).
 Denk aan: skill-tool-koppelingen naar verwijderde `Tool`-rows, FE-disabled-state, en of de
 orchestrator/agent robuust omgaat met een geselecteerde skill waarvan een tool weg is.
+
+## Background Agents dispatchen met een eigen, instelbaar orchestrator-model (slot `chat.background`)
+_Aangedragen 2026-07-17 (Nick). Uitgebreid onderzoek gedaan (code); keuzes met Nick beslist
+2026-07-17 (no-fallback); nog niet gebouwd. Sluit aan op het agent-mode-framework-item hierboven._
+
+**Doel:** background agents kunnen dispatchen (fire-and-forget subagent-runs) waarbij instelbaar
+is **welk model de orchestrator van zo'n background run aandrijft** — los van het voorgrond-model.
+Conform het slot-principe: géén hardcoded modellen, de toewijzing ís de configuratie.
+
+**Kernbevinding — het dispatchen bestaat al, alleen het eigen slot ontbreekt:**
+- `agent__dispatch` (`src/services/builtin/tools/agent_tools.py:110`) draait een verse subagent
+  (eigen `subagent-<uuid>`-thread, schone context, condensed handoff, `SUBAGENT_MAX_DEPTH`=3,
+  parallelle dispatches) via `run_ask_orchestrator(...)`.
+- `task__create/status/result/list` (`src/services/builtin/tools/background_tasks.py`) is het
+  fire-and-forget-laagje eromheen: detached `asyncio.create_task` → `agent_dispatch`, `bg-<hex12>`-id,
+  `background_tasks`-tabel + `background_task_router.py` + takenpaneel in de FE, drain-notificaties
+  in de agent-loop, restore-on-boot, `BACKGROUND_TASK_MAX_ACTIVE`=16.
+- **De gap:** een background run resolvet nu gewoon `chat.planner` (zelfde slot als de voorgrond;
+  `ask_job_callbacks.py`, `provider_factory.role_to_slot`). Het `model`-argument op beide tools is
+  een per-call override (`agent_tools.py:158`), geen configuratie.
+- Motivatie uit de code zelf (`background_tasks.py:228`): op een LOKAAL model queuet de background
+  task achter de eigen stappen van de parent ("one model, one queue") — een **eigen slot** dat naar
+  een ándere provider wijst is precies hoe je echte parallelliteit krijgt.
+
+**Kernontwerp:**
+1. **Nieuw slot `chat.background`** in `capability_router.ALL_SLOTS` (geen DB-migratie nodig —
+   `capability_assignments` is keyed op slot-string) + classificeren als **OUTSOURCEABLE** in
+   `execution_mode.CAP_CLASS`. Daarmee geldt het agent-mode-framework automatisch: **een CLI-agent
+   (claude_code, straks codex) op `chat.background` ⇒ background runs draaien in agent-modus** —
+   dat is de "Orchestrator mode"-instelbaarheid die Nick wil, langs beide assen (welk model / welke modus).
+2. **Resolutie in de dispatch-keten:** `agent_dispatch`/`task_create` markeren de run als background
+   (payload-vlag of `role="background:"`); `role_to_slot` mapt die naar `chat.background`; per-call
+   `model`-override blijft werken (bestaand `forced_model`-mechanisme).
+3. **Leeg slot = stuklopen — GEEN fallback (beslist, Nick 2026-07-17).** Onbezet `chat.background` ⇒
+   `task__create`/`agent__dispatch` weigeren met een duidelijke fout ("wijs een model toe aan
+   chat.background"), consistent met het no-fallback-kernprincipe uit het agent-mode-item: de
+   toewijzing ís de configuratie, het systeem gokt niet. Let op bij uitrol: background dispatch
+   doet het pas weer nádat het slot is toegewezen — dat is bedoeld gedrag, in de foutmelding en
+   docs benoemen.
+4. **FE:** routing-scherm (`AIModelsSection.tsx`) toont het nieuwe slot met uitleg + modus-badge
+   (checken of de slot-lijst dynamisch uit de BE komt of hardcoded is).
+
+**Fasering (klein):**
+- **Fase 1 — slot + resolutie.** `ALL_SLOTS` + `CAP_CLASS` + role-mapping + background-vlag in de
+  dispatch-keten; unit-tests (leeg=weigert met duidelijke fout, toegewezen=eigen model, override wint).
+  Acceptatie: `task__create` op een tweede provider draait aantoonbaar op dat model terwijl de
+  voorgrond op `chat.planner` blijft.
+- **Fase 2 — agent-modus op het slot.** `slot_mode("chat.background")==agent` ⇒ de background run
+  via de CLI-agent-weg (afhankelijk van agent-mode Fase 2; anders parkeren tot die af is).
+  Acceptatie: CLI-agent toegewezen ⇒ background run = agent-run met handoff-envelope.
+- **Fase 3 — FE + docs.** Slot in routing-scherm + `docs/guide/ai-models.md`/`agent.md` bijwerken.
+
+**Betrokken bestanden (referentie):** `src/services/providers/capability_router.py:31` (`ALL_SLOTS`),
+`src/services/providers/execution_mode.py:50` (`CAP_CLASS`), `src/services/providers/provider_factory.py:41`
+(`role_to_slot`), `src/services/builtin/tools/agent_tools.py`, `src/services/builtin/tools/background_tasks.py`,
+`src/services/assistants/ask_job_callbacks.py`, FE `lovely-landing-project/src/.../AIModelsSection.tsx`.
+
+## Azure AI Foundry als LLM-provider (`azure_foundry`)
+_Aangedragen 2026-07-17 (Nick). Uitgebreid onderzoek gedaan (code + extern, Microsoft Learn);
+typenaam `azure_foundry` beslist 2026-07-17; nog niet gebouwd._
+
+**Doel:** Azure AI Foundry-deployments als volwaardige provider in de registry, zodat álle
+Foundry-modellen (Azure OpenAI-modellen én DeepSeek/Grok/MAI/Llama/Phi/Mistral) toewijsbaar zijn
+op routing-slots — chat, embeddings, en per-model capabilities.
+
+**Extern onderzoek (2026-07-17) — de weg is gunstig:**
+- Sinds aug 2025 heeft Foundry een **v1 GA API die OpenAI-compatibel is**: standaard `openai`-SDK
+  met `base_url="https://<resource>.openai.azure.com/openai/v1/"` (of
+  `https://<resource>.services.ai.azure.com/openai/v1/`) — **geen `api-version` meer, geen
+  `AzureOpenAI()`-client meer nodig.**
+- **`model` = de deployment-naam** (niet de modelnaam) — belangrijk voor `ProviderModel.model_id`.
+- **Auth:** Azure API-key als `api_key`, óf keyless Entra ID: `get_bearer_token_provider(
+  DefaultAzureCredential(), "https://ai.azure.com/.default")` als `api_key` (auto token-refresh zit
+  nu in de OpenAI-client). Voor een server: service principal via env
+  (`AZURE_CLIENT_ID`/`AZURE_TENANT_ID`/`AZURE_CLIENT_SECRET`) — géén device-code/loopback nodig.
+- Niet-OpenAI-modellen (DeepSeek, Grok, MAI-DS-R1, …) draaien via **dezelfde** v1
+  chat-completions-route, incl. streaming/function calling waar het model dat kan.
+- ⚠️ **`azure-ai-inference` SDK is deprecated** (retired 26-08-2026) — NIET op bouwen.
+- Bronnen: learn.microsoft.com → `foundry/foundry-models/concepts/endpoints`,
+  `foundry/openai/api-version-lifecycle`, `foundry/how-to/model-inference-to-openai-migration`.
+
+**Bevinding codebase — er is nog géén Azure-provider, wel een perfecte template:**
+- `openai_compatible_provider.py` is exact het juiste patroon (`AsyncOpenAI(base_url=..., api_key=...)`,
+  chat/stream/embeddings/transcription/speech) en noemt Azure al in z'n docstring. Dankzij de v1 API is
+  een Foundry-adapter bijna 1:1 dit patroon — geen `api-version` query-param of `api-key`-header-hack meer.
+- De string `"azure_openai"` komt al anticiperend voor in `vision_capability.py:23`,
+  `web_search_capability.py:16` en `web_search_service.py:56`, maar niets construeert een provider.
+- Registratiepunten voor een nieuw type: `models/provider.py:35` (`PROVIDER_TYPES`),
+  `provider_factory.py:62/130` (`_build_chat_provider`/`_build_embedding_provider`),
+  `provider_presets.py` (`PRESETS`), `model_discovery.py:67`.
+- Credentials horen in de DB (`Provider.api_key_encrypted`, Fernet) — bestaand patroon, geen env.
+- **Los houden van** de bestaande Azure-login voor Fabric (`fabric_data_agent`, device-code) — andere
+  resource/scope, niet koppelen.
+
+**Kernontwerp:**
+1. **Nieuw `provider_type = "azure_foundry"` (beslist, Nick 2026-07-17)** — subclass/variant van de
+   openai_compatible-adapter (zelfde OpenAI-SDK-pad). De capability-helpers die nu anticiperend
+   `"azure_openai"` noemen worden uitgebreid met `"azure_foundry"` (het type dekt méér dan alleen
+   OpenAI-modellen).
+2. **Preset** in `PRESETS`: base_url-template `https://<resource>.openai.azure.com/openai/v1/`
+   (resource-naam invullen), `needs_base_url`, capabilities chat+embeddings. In de FE-uitleg expliciet:
+   "model-id = je deployment-naam".
+3. **Fase 1 auth = API-key** (past in `api_key_encrypted`). **Entra ID keyless als latere fase**
+   (token-provider i.p.v. statische key; vergt een provider-config-keuze in `config_json` +
+   `azure-identity`-dependency — alleen doen als Nick het nodig heeft).
+4. **Model discovery:** onderzoeken of `GET {base_url}/models` op de v1-route de deployments teruggeeft;
+   zo ja → branch in `model_discovery.py`, zo nee → handmatig modellen toevoegen (bestaande flow, net
+   als openai_compatible).
+5. **Niet doen:** Foundry op het legacy OpenAI-base-path (`openai_service.py`, Responses API) — dat pad
+   blijft OpenAI-only; Foundry loopt volledig via de provider-adapter.
+
+**Fasering (klein):**
+- **Fase 1 — adapter + registratie.** Provider-class, `PROVIDER_TYPES`, factory-branches, preset,
+  capability-helpers; unit-tests (mock base_url) + één live smoke op Nicks Foundry-resource
+  (chat + streaming + embeddings, en één niet-OpenAI-deployment als die er is).
+  Acceptatie: Foundry-provider aanmaken via `/admin/providers`, model toewijzen aan een slot, turn draait.
+- **Fase 2 — discovery + polish.** Deployment-listing (indien API het geeft), vision/web-search-flags
+  per model, `docs/guide/ai-models.md` bijwerken.
+- **Fase 3 (optioneel) — Entra ID keyless.** Token-provider-auth als alternatief voor de API-key.
+
+**Betrokken bestanden (referentie):** `src/services/providers/openai_compatible_provider.py` (template),
+`src/services/providers/provider_factory.py:62,130`, `src/models/provider.py:35`,
+`src/services/providers/provider_presets.py`, `src/services/providers/model_discovery.py:67`,
+`src/services/providers/vision_capability.py:23`, `src/services/providers/web_search_capability.py:16`,
+`src/services/web_search_service.py:56`.
