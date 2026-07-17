@@ -42,3 +42,9 @@ TAG=0.1.0 docker compose -f docker-compose.release.yml up -d
 ```
 
 Images (GHCR): `ghcr.io/nickozz714/nd3x-backend` · `ghcr.io/nickozz714/nd3x-frontend`.
+
+The backend image bundles everything the agent needs — including the **`claude` CLI**, so the
+[Claude Code provider](ai-models.md#claude-code-cli) works in Docker with only a
+`claude setup-token` pasted as its API key (no host login, no per-token cost). After first
+start, open the app and finish setup: create the admin, add your providers, and assign the
+[routing slots](ai-models.md#routing--the-slots).
