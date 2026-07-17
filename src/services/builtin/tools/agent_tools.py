@@ -68,6 +68,43 @@ def _build_task_prompt(task: str, context: Optional[str]) -> str:
     return f"{task}\n\n## Context from the dispatching agent\n{context}"
 
 
+_BACKGROUND_SLOT = "chat.background"
+_BACKGROUND_UNSET_ERROR = (
+    "Background agents have no model. Assign one to the 'chat.background' slot in "
+    "AI Models → Routing, or pass an explicit 'model'. (No fallback — the slot "
+    "assignment is the configuration.)"
+)
+
+
+def resolve_background_model(model_arg: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Resolve which model drives a dispatched/background subagent run.
+
+    Returns ``(model, error)``. A per-call ``model`` override always wins.
+    Otherwise the ``chat.background`` slot decides. NO FALLBACK: if neither is
+    set, ``error`` is a clear, actionable message and the caller must refuse the
+    dispatch (the slot assignment IS the configuration — the system does not
+    silently borrow the foreground planner model).
+    """
+    if model_arg:
+        return model_arg, None
+    try:
+        from db.database import SessionLocal
+        from services.providers.registry_service import ProviderRegistryService
+
+        with SessionLocal() as db:
+            resolved = ProviderRegistryService(db).resolve_slot(_BACKGROUND_SLOT)
+        if resolved and resolved.model_id:
+            return resolved.model_id, None
+    except Exception as exc:  # noqa: BLE001 — a registry hiccup must not silently fall back
+        log.warningx("chat.background resolutie mislukt", error=str(exc))
+        return None, (
+            "Could not resolve the background model (chat.background). Assign a "
+            "model to the 'chat.background' slot in AI Models → Routing, or pass "
+            "an explicit 'model'."
+        )
+    return None, _BACKGROUND_UNSET_ERROR
+
+
 def _condense_result(
     *,
     out: Dict[str, Any],
@@ -116,7 +153,9 @@ def _condense_result(
         "facts, artifacts, open_questions). Use for parallelizable or well-scoped "
         "subtasks (research, drafting, analysis). Provide `assistant` to dispatch a "
         "specific assistant by name, or omit it for an ad-hoc general-purpose agent. "
-        "Issue multiple dispatch calls in one turn to fan out work in parallel."
+        "Issue multiple dispatch calls in one turn to fan out work in parallel. "
+        "The subagent runs on the 'chat.background' routing slot's model (or the "
+        "`model` you pass); if neither is set the dispatch is refused."
     ),
     input_schema={
         "type": "object",
@@ -140,7 +179,7 @@ def _condense_result(
             },
             "model": {
                 "type": "string",
-                "description": "Optional model override; defaults to the configured LLM model.",
+                "description": "Optional model override for this run. Omit to use the 'chat.background' routing slot's model.",
             },
         },
         "required": ["task"],
@@ -155,7 +194,7 @@ async def agent_dispatch(args: Dict[str, Any]) -> Dict[str, Any]:
     assistant = (args.get("assistant") or "").strip() or None
     skills = args.get("skills") if isinstance(args.get("skills"), list) else None
     context = args.get("context")
-    model = (args.get("model") or "").strip() or None  # None → resolved from slot
+    model = (args.get("model") or "").strip() or None  # None → resolved from chat.background
 
     depth = current_subagent_depth()
     max_depth = int(getattr(settings, "SUBAGENT_MAX_DEPTH", 3))
@@ -166,12 +205,23 @@ async def agent_dispatch(args: Dict[str, Any]) -> Dict[str, Any]:
             "error": f"Subagent dispatch refused: max nesting depth {max_depth} reached.",
         }
 
+    # Which model drives this background run: a per-call override, else the
+    # chat.background slot. No fallback — refuse if neither is configured.
+    model, bg_error = resolve_background_model(model)
+    if bg_error:
+        log.warningx("Subagent dispatch geweigerd: geen background-model", error=bg_error)
+        return {"status": "error", "error": bg_error}
+
     forced_assistant = assistant or (getattr(settings, "SUBAGENT_DEFAULT_ASSISTANT", "") or None)
     thread_id = f"subagent-{uuid.uuid4().hex[:12]}"
 
     payload: Dict[str, Any] = {
         "_subagent": True,
         "_subagent_depth": depth + 1,
+        # Drive the WHOLE background run on the resolved background model (planner
+        # + any internal steps), and — when that model is a CLI-agent — make the
+        # run go through agent mode. forced_model is the existing per-run override.
+        "forced_model": model,
     }
     if forced_assistant:
         payload["force_assistant"] = forced_assistant

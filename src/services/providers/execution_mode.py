@@ -51,6 +51,8 @@ CAP_CLASS: Dict[str, str] = {
     # text / reasoning / deciding → may run as a CLI agent
     "chat.planner": OUTSOURCEABLE,
     "chat.cognition": OUTSOURCEABLE,
+    # a CLI agent here makes dispatched/background subagent runs run in agent mode
+    "chat.background": OUTSOURCEABLE,
     "chat.memory_decision": OUTSOURCEABLE,
     "chat.auto_decision": OUTSOURCEABLE,
     "meeting.action_detector": OUTSOURCEABLE,

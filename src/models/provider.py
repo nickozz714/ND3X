@@ -56,6 +56,7 @@ CAPABILITIES = ("chat", "embeddings", "transcription", "tts", "realtime", "image
 ROUTING_SLOTS = (
     "chat.planner",
     "chat.cognition",
+    "chat.background",
     "chat.auto_decision",
     "meeting.action_detector",
     "embeddings",

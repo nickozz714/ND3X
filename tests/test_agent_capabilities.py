@@ -143,6 +143,9 @@ def _install_fake_orchestrator(monkeypatch, fake):
 def test_agent_dispatch_named_and_condenses(monkeypatch):
     from services.builtin.tools import agent_tools
 
+    # A background model must resolve (chat.background slot / override); stub it.
+    monkeypatch.setattr(agent_tools, "resolve_background_model", lambda m: (m or "bg-model", None))
+
     calls = []
 
     async def fake(*, question, payload, thread_id, model):
@@ -158,6 +161,7 @@ def test_agent_dispatch_named_and_condenses(monkeypatch):
     assert res["summary"] == "did it" and res["facts"] == {"k": 1}
     assert calls[-1]["force_assistant"] == "Researcher"
     assert calls[-1]["_subagent_depth"] == 1
+    assert calls[-1]["forced_model"] == "bg-model"
 
 
 def test_agent_dispatch_depth_guard(monkeypatch):
@@ -197,6 +201,9 @@ def test_background_task_lifecycle(monkeypatch):
         return {"status": "ok", "summary": "bg: " + args.get("task", ""), "thread_id": "sub-x"}
 
     monkeypatch.setattr("services.builtin.tools.agent_tools.agent_dispatch", fake_dispatch)
+    # task_create resolves the background model up front (no-fallback gate) — stub it.
+    monkeypatch.setattr("services.builtin.tools.agent_tools.resolve_background_model",
+                        lambda m: (m or "bg-model", None))
 
     create = reg._handlers["task__create"]
     status = reg._handlers["task__status"]

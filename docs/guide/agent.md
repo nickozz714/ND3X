@@ -30,9 +30,17 @@ result is folded back into the thread automatically when it finishes — you don
 to poll for it. A background task is a full agent run in its own right, so it can select
 skills and use tools like any turn.
 
+Background tasks (and one-shot `agent__dispatch` subagents) run on their **own model**:
+the **Background agents** slot (`chat.background`) in **AI Models → Routing**. This is
+deliberately separate from the Agent model so a background job can use a cheaper — or a
+truly-parallel cloud — model. There is **no fallback**: if `chat.background` is empty,
+dispatch is refused with a clear message (the slot assignment is the configuration).
+A per-call `model` override still works. Assigning a **CLI-agent** (e.g. Claude Code) to
+this slot makes background runs execute in agent mode.
+
 > On a **local model**, background tasks share the model's single queue, so running
-> several at once won't be faster — point a task at a **different** model (a cloud model,
-> or a second smaller local one) for real parallelism.
+> several at once won't be faster — assign a **different** model (a cloud model, or a
+> second smaller local one) to `chat.background` for real parallelism.
 
 ## Agent Settings tab
 

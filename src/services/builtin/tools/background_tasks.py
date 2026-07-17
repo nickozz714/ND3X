@@ -225,9 +225,11 @@ async def drain_completed_background_tasks(thread_id: Optional[str]) -> List[Dic
         "can keep working. The task runs as a detached subagent (same arguments as "
         "agent__dispatch). Poll task__status / task__result to retrieve the outcome; "
         "completed tasks are also surfaced automatically on later loop iterations. "
+        "The task runs on the 'chat.background' routing slot's model (or the `model` "
+        "you pass); if neither is set the task is refused. "
         "NOTE: on a LOCAL model the task queues behind your own steps (one model, "
-        "one queue) — it finishes shortly after your turn, not in parallel; pass a "
-        "different 'model' if true parallelism matters."
+        "one queue) — it finishes shortly after your turn, not in parallel; assign a "
+        "different (e.g. cloud) model to chat.background if true parallelism matters."
     ),
     input_schema={
         "type": "object",
@@ -246,6 +248,16 @@ async def task_create(args: Dict[str, Any]) -> Dict[str, Any]:
     task = str((args or {}).get("task") or "").strip()
     if not task:
         return {"status": "error", "error": "task__create requires a non-empty 'task'."}
+
+    # No-fallback gate up front: resolve the background model (per-call override or
+    # the chat.background slot) BEFORE spawning, so an unconfigured slot fails fast
+    # with a clear error instead of creating a task that immediately errors. Inject
+    # the resolved model so the detached agent_dispatch uses it directly.
+    from services.builtin.tools.agent_tools import resolve_background_model
+    bg_model, bg_error = resolve_background_model((args or {}).get("model"))
+    if bg_error:
+        return {"status": "error", "error": bg_error}
+    args = {**(args or {}), "model": bg_model}
 
     max_active = int(getattr(settings, "BACKGROUND_TASK_MAX_ACTIVE", 16))
     async with _TASKS_LOCK:
