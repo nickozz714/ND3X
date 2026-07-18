@@ -95,49 +95,110 @@ async def workflow_run(args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @internal_tool_registry.register(
-    name="workflow__generate",
-    title="Generate Workflow (AI draft)",
+    name="workflow__create",
+    title="Create Workflow",
     description=(
-        "Design and CREATE a new ND3X workflow from a plain-language description "
-        "(steps may include assistant reasoning, tool calls, notifications "
-        "(ui/email), http requests, set_variable). The draft is created DISABLED "
-        "so the user reviews and enables it in the workflow builder. Returns the "
-        "new workflow id, name and step count."
+        "CREATE a new ND3X workflow from a step design YOU author (you have the "
+        "conversation context — design the steps yourself, no second model). Linear "
+        "chain: each operation runs after the previous. The workflow is created "
+        "DISABLED so the user reviews and enables it in the builder. Returns the "
+        "new workflow id."
     ),
     input_schema={
         "type": "object",
         "properties": {
-            "description": {
-                "type": "string",
-                "description": ("What the workflow should do, step by step where "
-                                 "possible — include the desired name, any email "
-                                 "recipients, schedules and conditions."),
+            "name": {"type": "string", "description": "Workflow name."},
+            "description": {"type": "string", "description": "What the workflow does (shown in the builder)."},
+            "operations": {
+                "type": "array",
+                "minItems": 1,
+                "description": (
+                    "Ordered steps. Each: {type, name, ...type-specific fields}. Types: "
+                    "assistant {question, skill_names?} · tool {tool_name, args?} · "
+                    "notification {channel: ui|email|trace, subject, message, severity?, recipients?} · "
+                    "http_request {method, url, headers?} · set_variable {variables} · "
+                    "new_thread {variable?}. Reference earlier output with {{variables}}."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string",
+                                  "enum": ["assistant", "tool", "notification",
+                                            "http_request", "set_variable", "new_thread"]},
+                        "name": {"type": "string"},
+                    },
+                    "required": ["type"],
+                },
             },
         },
-        "required": ["description"],
+        "required": ["name", "operations"],
     },
     tags=["internal", "workflow"],
 )
-async def workflow_generate(args: Dict[str, Any]) -> Dict[str, Any]:
-    description = str((args or {}).get("description") or "").strip()
-    if not description:
-        return {"status": "error", "error": "workflow__generate requires 'description'."}
+async def workflow_create(args: Dict[str, Any]) -> Dict[str, Any]:
+    name = str((args or {}).get("name") or "").strip()
+    steps = (args or {}).get("operations")
+    if not name:
+        return {"status": "error", "error": "workflow__create requires 'name'."}
+    if not isinstance(steps, list) or not steps:
+        return {"status": "error", "error": "workflow__create requires a non-empty 'operations' list."}
 
     from db.database import SessionLocal
-    from services.workflows.workflow_ai import generate_and_create
+    from services.workflows.workflow_ai import _op_config, _resolve_agent_id
+    from schemas.workflow import WorkflowCreate, WorkflowOperationCreate
+    from services.workflows.workflow_service import WorkflowService
 
+    allowed = {"assistant", "tool", "notification", "http_request", "set_variable", "new_thread"}
     with SessionLocal() as db:
+        agent_id = _resolve_agent_id(db)
+        ops = []
+        prev_pos = None
+        for i, step in enumerate(steps):
+            if not isinstance(step, dict):
+                return {"status": "error", "error": f"operation {i + 1} must be an object."}
+            t = str(step.get("type") or "").strip()
+            if t not in allowed:
+                return {"status": "error",
+                        "error": f"operation {i + 1}: unknown type '{t}' (allowed: {sorted(allowed)})."}
+            config = _op_config({**step, "type": t})
+            # Fields _op_config doesn't map but the executor honours (e.g.
+            # notification recipients) ride along via an explicit config dict.
+            extra = step.get("config")
+            if isinstance(extra, dict):
+                config = {**config, **extra}
+            if t == "notification" and isinstance(step.get("recipients"), list):
+                config["recipients"] = [str(r) for r in step["recipients"] if str(r or "").strip()]
+            position = (i + 1) * 100
+            ops.append(WorkflowOperationCreate(
+                name=(step.get("name") or f"Step {i + 1}").strip(),
+                operation_type=t,
+                operation_ref_id=agent_id if t == "assistant" else 0,
+                config=config,
+                depends_on=[prev_pos] if prev_pos is not None else [],
+                position=position,
+            ))
+            prev_pos = position
+
+        svc = WorkflowService(db)
+        existing = {w.name for w in svc.get_all(limit=1000)}
+        final = name
+        n = 2
+        while final in existing:
+            final = f"{name} ({n})"; n += 1
         try:
-            created = await generate_and_create(db, {"description": description})
+            created = svc.create(WorkflowCreate(
+                name=final, description=(args or {}).get("description"),
+                is_enabled=False,  # review before enabling
+                operations=ops,
+            ))
         except Exception as exc:  # noqa: BLE001 — surface the reason to the agent
             return {"status": "error", "error": str(exc)}
-    log.infox("workflow__generate: draft aangemaakt",
-              workflow_id=created.get("id"), name=created.get("name"))
+    log.infox("workflow__create: draft aangemaakt", workflow_id=created.id, name=final, steps=len(ops))
     return {
         "status": "success",
-        "workflow_id": created.get("id"),
-        "name": created.get("name"),
-        "steps": created.get("steps"),
+        "workflow_id": created.id,
+        "name": final,
+        "steps": len(ops),
         "enabled": False,
         "note": ("Draft created DISABLED. Tell the user to review and enable it in "
                  "the Workflows builder; use workflow__describe to show its steps."),

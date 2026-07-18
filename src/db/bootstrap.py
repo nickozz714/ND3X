@@ -68,30 +68,31 @@ Flow:
 Rules: ask the user (ask_user) for missing host/path/credential details instead of guessing. Never put secrets in a path/URI — reference credentials by id. A directory source transfers every file in it."""
 
 
-_WORKFLOW_BUILDING_INSTRUCTIONS = """Build and inspect ND3X workflows with the workflow__* tools. You are ALLOWED and EXPECTED to create workflows when the user asks for automation, scheduled work, or notifications — do not claim you can't.
+_WORKFLOW_BUILDING_INSTRUCTIONS = """Build and inspect ND3X workflows with the workflow__* tools. You are ALLOWED and EXPECTED to create workflows when the user asks for automation, scheduled work, or notifications — do not claim you can't. YOU design the steps yourself (you have the conversation context); workflow__create simply persists your design.
 
 Flow:
 1. workflow__list — see what already exists before creating something new.
-2. workflow__generate with a thorough plain-language description — it designs a linear draft and CREATES it DISABLED. Include in the description: the desired name, each step, any email recipients, and schedule wishes.
+2. Design the steps from the conversation, then ONE workflow__create call with
+   {name, description, operations: [...]} — a linear chain (each step runs after
+   the previous). It is CREATED DISABLED.
 3. workflow__describe on the result — present the steps to the user for review.
 4. The user reviews and ENABLES it in the Workflows builder (you cannot enable it; that is by design). Schedules/triggers are also configured there.
 5. workflow__run to start an ENABLED workflow now.
 
-Operations a workflow can contain (the generator emits the starred ones; the rest can be added in the builder):
-- *assistant — an agent step: { question } (reasoning/writing/tool work)
-- *tool — one direct tool call: { tool_name, arguments }
-- *notification — notify the user: { channel: 'ui'|'email'|'trace', subject, message, severity, recipients?: [emails] }. Email REQUIRES mail settings (Instellingen → Mail) to be configured; without them advise 'ui'.
-- *http_request — { method, url, headers }
-- *set_variable / new_thread — state control between steps
-- condition, for_each, sub_workflow, merge, artifact, fail — branching/looping/composition (builder-only)
-Steps can reference earlier output via {{variables}} in their config.
+Operation types for workflow__create (each: {type, name, ...fields}):
+- assistant — an agent step: { question, skill_names? } (reasoning/writing/tool work)
+- tool — one direct tool call: { tool_name, args }
+- notification — notify the user: { channel: 'ui'|'email'|'trace', subject, message, severity?, recipients?: [emails] }. Email REQUIRES mail settings (Instellingen → Mail) to be configured; without them advise 'ui'.
+- http_request — { method, url, headers? }
+- set_variable — { variables: {k: v} } / new_thread — { variable? }
+Steps can reference earlier output via {{variables}} in their config. Richer ops (condition, for_each, sub_workflow, merge, artifact, fail) are builder-only — mention them when relevant.
 
-Rules: prefer ONE workflow__generate call with a complete description over many small edits. Never promise an email notification when mail settings are not configured — say so and offer channel 'ui' instead. After generating, always show the draft (workflow__describe) and tell the user to review + enable it in the builder."""
+Rules: design completely, create once — prefer one workflow__create call over many small edits. Never promise an email notification when mail settings are not configured — say so and offer channel 'ui' instead. After creating, always show the draft (workflow__describe) and tell the user to review + enable it in the builder."""
 
 
 async def ensure_workflow_building_skill(db: Session) -> None:
     """Seed the 'workflow_building' domain skill and link the workflow__* builtin
-    tools to it, so the CLI agent knows it can BUILD workflows (generate/describe/
+    tools to it, so the CLI agent knows it can BUILD workflows (create/describe/
     list/run) and gets the how-to only when the skill is selected (the gateway
     skill-scopes linked tools). Idempotent + best-effort — never blocks boot."""
     try:
