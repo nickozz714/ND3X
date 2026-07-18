@@ -211,3 +211,17 @@ def test_run_stream_events_forwards_resume_session_id(monkeypatch, db):
     assert captured["prompt"] == "zet volume +2"  # only the new turn on resume
     assert any(e.get("kind") == "session" and e.get("id") == "sess-out" for e in evs)
     assert any(e.get("kind") == "answer" for e in evs)
+
+
+def test_chat_agent_turn_budget_supports_many_hop_skills(db):
+    """A skill run can burn dozens-to-hundreds of tool hops (each = a CLI turn);
+    the default budget must not clip it at 40, and config still overrides."""
+    _add_cc(db)
+    provider = ClaudeCodeChatAgent(db)._build_provider("opus", None)
+    assert provider._max_turns >= 250
+    assert provider._timeout >= 7200  # agentic default: hours, not 10 min
+
+    db.query(pv.Provider).delete(); db.commit()
+    _add_cc(db, config={"chat_max_turns": 12, "timeout": 300})
+    provider2 = ClaudeCodeChatAgent(db)._build_provider("opus", None)
+    assert provider2._max_turns == 12 and provider2._timeout == 300
