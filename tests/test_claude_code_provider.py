@@ -344,6 +344,52 @@ def test_chat_stream_error_result_raises(monkeypatch):
         asyncio.run(_collect(ClaudeCodeChatProvider(default_model="sonnet"), "x"))
 
 
+# ------------------------------------------------- session resume (--resume)
+
+
+def test_build_cmd_adds_resume_flag_only_when_given():
+    p = ClaudeCodeChatProvider(default_model="opus", agentic=True)
+    cmd = p._build_cmd("opus", None, "sess-xyz")
+    i = cmd.index("--resume")
+    assert cmd[i:i + 2] == ["--resume", "sess-xyz"]
+    assert "--resume" not in p._build_cmd("opus", None)  # none → no flag
+
+
+def test_chat_passes_resume_and_returns_session_id(monkeypatch):
+    proc = _FakeProc(stdout=json.dumps(_result_envelope(session_id="sess-new")).encode())
+    captured: dict = {}
+    _patch_spawn(monkeypatch, proc, captured)
+    res = asyncio.run(
+        ClaudeCodeChatProvider(default_model="opus", agentic=True).chat(
+            "hoi", resume_session_id="sess-old"))
+    assert res.response_id == "sess-new"  # the id to persist for next turn
+    i = captured["cmd"].index("--resume")
+    assert captured["cmd"][i:i + 2] == ["--resume", "sess-old"]
+
+
+async def _collect_events(p: ClaudeCodeChatProvider, prompt: str, **kw) -> list[dict]:
+    return [ev async for ev in p.chat_stream_events(prompt, **kw)]
+
+
+def test_chat_stream_events_yields_session_and_forwards_resume(monkeypatch):
+    lines = _stream_lines(
+        {"type": "system", "subtype": "init", "session_id": "sess-abc"},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "home_tv_volume", "input": {"step": 2}}]}},
+        _result_envelope(result="klaar", session_id="sess-abc"),
+    )
+    proc = _FakeProc(stdout=lines)
+    captured: dict = {}
+    _patch_spawn(monkeypatch, proc, captured)
+    p = ClaudeCodeChatProvider(default_model="opus", agentic=True)
+    evs = asyncio.run(_collect_events(p, "zet volume +2", resume_session_id="sess-abc"))
+    assert any(e.get("kind") == "session" and e.get("id") == "sess-abc" for e in evs)
+    assert any(e.get("kind") == "tool" and e.get("name") == "home_tv_volume" for e in evs)
+    assert any(e.get("kind") == "answer" and e.get("text") == "klaar" for e in evs)
+    i = captured["cmd"].index("--resume")
+    assert captured["cmd"][i:i + 2] == ["--resume", "sess-abc"]
+
+
 # ------------------------------------------------- factory/discovery/health
 
 
