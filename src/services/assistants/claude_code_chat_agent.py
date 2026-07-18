@@ -73,7 +73,10 @@ class ClaudeCodeChatAgent(CliAgentRunner):
             oauth_token=key,
             cli_path=str(cfg.get("cli_path") or "claude"),
             agentic=True,  # full autonomous agent for the chat turn
-            max_turns=cfg.get("chat_max_turns") or cfg.get("max_turns") or 40,
+            # Skill-driven runs are long: many tool hops (each = a turn). 250 is a
+            # runaway guard, not a work budget — the provider's agent timeout (2h
+            # default) is the real cap. Override via config_json chat_max_turns.
+            max_turns=cfg.get("chat_max_turns") or cfg.get("max_turns") or 250,
             timeout=cfg.get("timeout"),
             extra_args=extra_args,
         )

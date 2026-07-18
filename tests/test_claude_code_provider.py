@@ -509,3 +509,17 @@ def test_claude_code_model_coercion():
     assert claude_code_model("qwen2.5:14b") == "opus"
     assert claude_code_model(None) == "opus"
     assert claude_code_model("", default="sonnet") == "sonnet"
+
+
+# ------------------------------------------------- long-run defaults
+
+
+def test_agentic_timeout_default_supports_hour_long_runs():
+    """Skill-driven agentic runs can take 60+ min; the agentic default must be
+    hours, while the plain-chat planner default stays snappy."""
+    agent = ClaudeCodeChatProvider(default_model="opus", agentic=True)
+    plain = ClaudeCodeChatProvider(default_model="opus", agentic=False)
+    assert agent._timeout >= 7200
+    assert plain._timeout <= 600
+    # explicit config always wins
+    assert ClaudeCodeChatProvider(agentic=True, timeout=120)._timeout == 120

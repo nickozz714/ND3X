@@ -32,9 +32,11 @@ process environment, so the orchestrator's own tools stay authoritative
 unless deliberately enabled.
 
 config_json keys (all optional):
-  {"agentic": bool, "cli_path": "claude", "timeout": 600, "max_turns": int,
+  {"agentic": bool, "cli_path": "claude", "timeout": seconds, "max_turns": int,
    "workdir": "/path", "allowed_tools": "Bash(git:*) Read", "extra_args": [...],
    "native_web": true, "native_files": false, "native_bash": false}
+Timeout default: agentic runs 7200s (CLAUDE_CODE_AGENT_TIMEOUT — skill runs take
+an hour+), plain-chat 600s (CLAUDE_CODE_TIMEOUT).
 """
 from __future__ import annotations
 
@@ -151,6 +153,18 @@ def _default_timeout() -> float:
         return 600.0
 
 
+def _default_agent_timeout() -> float:
+    """Wall-clock cap for a full AGENTIC run (chat turn / workflow op). Skill-driven
+    runs legitimately take an hour+ (many tool hops), so the default is 2h — a
+    safety net against a hung CLI, not a work budget. Non-agentic (planner-brain)
+    calls keep the short _default_timeout."""
+    try:
+        from component.config import settings
+        return float(getattr(settings, "CLAUDE_CODE_AGENT_TIMEOUT", 7200) or 7200)
+    except Exception:  # noqa: BLE001
+        return 7200.0
+
+
 def _to_prompt(user_input: ChatInput) -> str:
     """Flatten ChatInput to one prompt string for `claude -p` (stdin).
 
@@ -227,7 +241,10 @@ class ClaudeCodeChatProvider(ChatProvider):
         self._cli_path = (cli_path or "claude").strip() or "claude"
         self._agentic = bool(agentic)
         self._max_turns = max_turns
-        self._timeout = float(timeout) if timeout else _default_timeout()
+        # Agentic runs (skill-driven chat turns / workflow ops) legitimately take
+        # an hour+; plain-chat planner calls must stay snappy.
+        self._timeout = float(timeout) if timeout else (
+            _default_agent_timeout() if self._agentic else _default_timeout())
         self._workdir = workdir or None
         self._allowed_tools = allowed_tools or None
         self._extra_args = list(extra_args or [])
