@@ -194,6 +194,14 @@ def test_build_env_strips_api_key_and_injects_token(monkeypatch):
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in ClaudeCodeChatProvider()._build_env()
 
 
+def test_oauth_token_strips_embedded_whitespace():
+    # A setup-token pasted from a wrapped terminal can carry an embedded newline;
+    # the CLI rejects that as invalid. The provider strips ALL whitespace.
+    p = ClaudeCodeChatProvider(oauth_token="sk-ant-oat01-AB\nCD 12\t34")
+    assert p._oauth_token == "sk-ant-oat01-ABCD1234"
+    assert ClaudeCodeChatProvider(oauth_token="  \n ")._oauth_token is None
+
+
 def test_build_env_sets_is_sandbox_as_root(monkeypatch):
     # As root, the CLI refuses --permission-mode bypassPermissions unless IS_SANDBOX
     # is set. The provider marks it so the containerized (root) deploy works.

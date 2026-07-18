@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from component.logging import get_logger
@@ -219,7 +220,10 @@ class ClaudeCodeChatProvider(ChatProvider):
         native_bash: bool = False,
     ):
         self._default_model = default_model
-        self._oauth_token = (oauth_token or "").strip() or None
+        # Strip ALL whitespace, not just the ends: a setup-token pasted from a
+        # wrapped terminal can carry an embedded newline/space, which the CLI
+        # rejects as "OAuth access token is invalid". Tokens never contain spaces.
+        self._oauth_token = re.sub(r"\s", "", oauth_token or "") or None
         self._cli_path = (cli_path or "claude").strip() or "claude"
         self._agentic = bool(agentic)
         self._max_turns = max_turns
