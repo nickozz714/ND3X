@@ -194,6 +194,20 @@ def test_build_env_strips_api_key_and_injects_token(monkeypatch):
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in ClaudeCodeChatProvider()._build_env()
 
 
+def test_build_env_sets_is_sandbox_as_root(monkeypatch):
+    # As root, the CLI refuses --permission-mode bypassPermissions unless IS_SANDBOX
+    # is set. The provider marks it so the containerized (root) deploy works.
+    monkeypatch.setattr("os.geteuid", lambda: 0, raising=False)
+    assert ClaudeCodeChatProvider()._build_env().get("IS_SANDBOX") == "1"
+    # Non-root: don't touch it (bypassPermissions is allowed for non-root).
+    monkeypatch.setattr("os.geteuid", lambda: 1000, raising=False)
+    assert "IS_SANDBOX" not in ClaudeCodeChatProvider()._build_env()
+    # An explicit IS_SANDBOX is respected (root, but preset).
+    monkeypatch.setattr("os.geteuid", lambda: 0, raising=False)
+    monkeypatch.setenv("IS_SANDBOX", "0")
+    assert ClaudeCodeChatProvider()._build_env()["IS_SANDBOX"] == "0"
+
+
 def test_build_env_strips_nested_claude_code_session(monkeypatch):
     # ND3X launched from inside a Claude Code session (dev): the nested CLI
     # must not inherit that session's harness (it injects extra tools the
