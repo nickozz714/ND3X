@@ -421,7 +421,7 @@ def test_model_discovery_returns_static_aliases():
 
     out = discover_models(provider_type="claude_code", base_url=None, api_key=None)
     ids = [m["model_id"] for m in out["models"]]
-    assert sorted(ids) == ["haiku", "opus", "sonnet"]  # _shape sorts by (capability, id)
+    assert sorted(ids) == ["fable", "haiku", "opus", "sonnet"]  # _shape sorts by (capability, id)
     assert all(m["capability"] == "chat" for m in out["models"])
 
 
@@ -523,3 +523,11 @@ def test_agentic_timeout_default_supports_hour_long_runs():
     assert plain._timeout <= 600
     # explicit config always wins
     assert ClaudeCodeChatProvider(agentic=True, timeout=120)._timeout == 120
+
+
+def test_claude_code_model_accepts_fable():
+    from services.providers.claude_code_provider import claude_code_model
+    assert claude_code_model("fable") == "fable"
+    assert claude_code_model("Fable") == "Fable"          # casing preserved
+    assert claude_code_model("claude-fable-5") == "claude-fable-5"
+    assert claude_code_model("gpt-5.4-mini") == "opus"     # foreign id → default
