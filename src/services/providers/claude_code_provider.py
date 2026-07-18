@@ -130,7 +130,7 @@ def claude_code_model(model: Optional[str], *, default: str = "opus") -> str:
     with 'issue with the selected model …'. Accept the tier aliases and any
     'claude*' id; otherwise fall back to the provider default."""
     m = (model or "").strip().lower()
-    if m in ("opus", "sonnet", "haiku") or m.startswith("claude"):
+    if m in ("fable", "opus", "sonnet", "haiku") or m.startswith("claude"):
         return model  # keep original casing
     return default
 

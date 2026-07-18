@@ -70,7 +70,8 @@ def discover_models(
     t = (provider_type or "").strip()
     if t == "claude_code":
         # No listing API — the CLI takes model aliases; latest per tier.
-        return {"models": _shape(["opus", "sonnet", "haiku"], t)}
+        # fable = Claude Fable 5, the top tier (verified live: `--model fable`).
+        return {"models": _shape(["fable", "opus", "sonnet", "haiku"], t)}
     try:
         import httpx
         if t == "anthropic":
