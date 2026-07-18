@@ -68,17 +68,22 @@ class CliAgentRunner:
     # ── ND3X MCP gateway config lifecycle ───────────────────────────────────────
 
     @staticmethod
-    def write_gateway_config(prefix: str = "nd3x-mcp-") -> Optional[str]:
+    def write_gateway_config(prefix: str = "nd3x-mcp-",
+                             skill_names: Optional[list] = None) -> Optional[str]:
         """Write the ND3X MCP gateway ``--mcp-config`` to a temp file so the CLI
         agent gets ND3X's tools/skills/MCP servers via the stdio gateway. Returns
         the path (caller passes it to the provider and unlinks after the run), or
         ``None`` when it couldn't be written — the run then proceeds without ND3X
-        tools rather than failing."""
+        tools rather than failing.
+
+        ``skill_names`` = the turn's selected skills → the gateway exposes a
+        skill-linked tool only when one of its skills is selected (unlinked tools
+        stay always-on). None = legacy: expose everything."""
         try:
             from services.mcp.mcp_gateway import mcp_config_for_cli
             fd, path = tempfile.mkstemp(prefix=prefix, suffix=".json")
             with os.fdopen(fd, "w") as f:
-                json.dump(mcp_config_for_cli(), f)
+                json.dump(mcp_config_for_cli(selected_skills=skill_names), f)
             return path
         except Exception as exc:  # noqa: BLE001 — the run can still proceed without ND3X tools
             log.warningx("ND3X MCP gateway config schrijven mislukt — run draait zonder ND3X-tools",

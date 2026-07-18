@@ -68,6 +68,69 @@ Flow:
 Rules: ask the user (ask_user) for missing host/path/credential details instead of guessing. Never put secrets in a path/URI — reference credentials by id. A directory source transfers every file in it."""
 
 
+_WORKFLOW_BUILDING_INSTRUCTIONS = """Build and inspect ND3X workflows with the workflow__* tools. You are ALLOWED and EXPECTED to create workflows when the user asks for automation, scheduled work, or notifications — do not claim you can't.
+
+Flow:
+1. workflow__list — see what already exists before creating something new.
+2. workflow__generate with a thorough plain-language description — it designs a linear draft and CREATES it DISABLED. Include in the description: the desired name, each step, any email recipients, and schedule wishes.
+3. workflow__describe on the result — present the steps to the user for review.
+4. The user reviews and ENABLES it in the Workflows builder (you cannot enable it; that is by design). Schedules/triggers are also configured there.
+5. workflow__run to start an ENABLED workflow now.
+
+Operations a workflow can contain (the generator emits the starred ones; the rest can be added in the builder):
+- *assistant — an agent step: { question } (reasoning/writing/tool work)
+- *tool — one direct tool call: { tool_name, arguments }
+- *notification — notify the user: { channel: 'ui'|'email'|'trace', subject, message, severity, recipients?: [emails] }. Email REQUIRES mail settings (Instellingen → Mail) to be configured; without them advise 'ui'.
+- *http_request — { method, url, headers }
+- *set_variable / new_thread — state control between steps
+- condition, for_each, sub_workflow, merge, artifact, fail — branching/looping/composition (builder-only)
+Steps can reference earlier output via {{variables}} in their config.
+
+Rules: prefer ONE workflow__generate call with a complete description over many small edits. Never promise an email notification when mail settings are not configured — say so and offer channel 'ui' instead. After generating, always show the draft (workflow__describe) and tell the user to review + enable it in the builder."""
+
+
+async def ensure_workflow_building_skill(db: Session) -> None:
+    """Seed the 'workflow_building' domain skill and link the workflow__* builtin
+    tools to it, so the CLI agent knows it can BUILD workflows (generate/describe/
+    list/run) and gets the how-to only when the skill is selected (the gateway
+    skill-scopes linked tools). Idempotent + best-effort — never blocks boot."""
+    try:
+        from models.skill import Skill
+        from models.skill_tool import SkillTool
+        from models.tool import Tool
+        from models.mcp_server import MCPServer
+
+        skill = db.query(Skill).filter(Skill.name == "workflow_building").first()
+        if skill is None:
+            skill = Skill(
+                name="workflow_building",
+                display_name="Workflow building",
+                description=("Create, inspect and run ND3X workflows (automations): "
+                             "multi-step flows with agent steps, tool calls, ui/email "
+                             "notifications, http requests and schedules. Use for any "
+                             "'automate this', 'every day/week', 'notify/mail me when' request."),
+                instructions=_WORKFLOW_BUILDING_INSTRUCTIONS,
+                is_enabled=True, priority=100, source="builtin",
+            )
+            db.add(skill)
+            db.flush()
+        else:
+            skill.instructions = _WORKFLOW_BUILDING_INSTRUCTIONS  # keep current per release
+
+        server = db.query(MCPServer).filter(MCPServer.name == "Builtin").first()
+        if server is not None:
+            tools = db.query(Tool).filter(Tool.mcp_server_id == server.id,
+                                          Tool.name.like("workflow\\_\\_%", escape="\\")).all()
+            existing = {st.tool_id for st in db.query(SkillTool).filter(SkillTool.skill_id == skill.id).all()}
+            for t in tools:
+                if t.id not in existing:
+                    db.add(SkillTool(skill_id=skill.id, tool_id=t.id, is_enabled=True))
+        db.commit()
+        log.infox("Workflow-building skill geseed", skill_id=skill.id)
+    except Exception as exc:  # noqa: BLE001 — never block boot
+        log.warningx("Workflow-building skill seed mislukt", error=str(exc))
+
+
 async def ensure_route_building_skill(db: Session) -> None:
     """Seed the 'transfer_route_building' domain skill and link the transfer_* builtin
     tools to it. Idempotent + best-effort (must never block boot). Runs after the
@@ -497,6 +560,8 @@ async def run_bootstrap(db: Session) -> None:
     await ensure_builtin_tools_synced(db)
     # Seed the route-building skill (links the transfer_* tools) after the sync.
     await ensure_route_building_skill(db)
+    # Seed the workflow-building skill (links the workflow__* tools) likewise.
+    await ensure_workflow_building_skill(db)
     # Fresh-install defaults: the system-skill contracts + a default agent, so a clean
     # DB is usable out of the box. Only-if-missing — never clobbers a curated DB.
     await ensure_system_skills(db)

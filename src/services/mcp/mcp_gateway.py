@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from component.logging import get_logger
 
@@ -76,12 +76,54 @@ def _tool_to_schema(argument: Any) -> Dict[str, Any]:
     return {"type": "object", "properties": {}}
 
 
-def _list_gateway_tools(db) -> List[Any]:
+def _skill_scoped_tool_ids(db) -> Dict[int, set]:
+    """tool_id → the ENABLED skill names it is linked to (via skill_tool). Tools
+    that appear here are "skill-scoped": exposed only when one of their skills is
+    selected for the turn. Tools without links stay always-on."""
+    from models.skill import Skill
+    from models.skill_tool import SkillTool
+
+    out: Dict[int, set] = {}
+    rows = (db.query(SkillTool, Skill)
+            .join(Skill, Skill.id == SkillTool.skill_id)
+            .filter(SkillTool.is_enabled == True,  # noqa: E712
+                    Skill.is_enabled == True)      # noqa: E712
+            .all())
+    for link, skill in rows:
+        if skill.name:
+            out.setdefault(link.tool_id, set()).add(skill.name)
+    return out
+
+
+def _selected_skills_from_env() -> Optional[set]:
+    """The turn's selected skills, passed by the parent via ND3X_GATEWAY_SKILLS
+    (comma-separated). Absent → None → no filtering (legacy: expose everything);
+    present-but-empty → filter to always-on tools only."""
+    raw = os.environ.get("ND3X_GATEWAY_SKILLS")
+    if raw is None:
+        return None
+    return {s.strip() for s in raw.split(",") if s.strip()}
+
+
+def _list_gateway_tools(db, selected_skills: Optional[set] = None) -> List[Any]:
     """Enabled DB tools whose server is enabled, minus the excluded web tools.
-    Each becomes one MCP tool that calls back into ToolExecutionService."""
+    Each becomes one MCP tool that calls back into ToolExecutionService.
+
+    ``selected_skills`` scopes skill-linked tools to the turn: a tool linked to
+    one or more skills is only exposed when one of those skills was selected
+    (None = no filtering — legacy behaviour for callers that don't pass skills).
+    Unlinked tools are always exposed."""
     from fastmcp.tools.tool import FunctionTool
     from services.mcp.tool_execution_service import ToolExecutionService  # noqa: F401
     from repository.tool_repository import ToolRepository
+
+    skill_scoped: Dict[int, set] = {}
+    if selected_skills is not None:
+        try:
+            skill_scoped = _skill_scoped_tool_ids(db)
+        except Exception as exc:  # noqa: BLE001 — filtering must never break the gateway
+            log.warningx("gateway: skill-scoping overslaan", error=str(exc))
+            skill_scoped = {}
 
     tools = ToolRepository(db).get_all_with_relations(skip=0, limit=2000)
     out: List[Any] = []
@@ -94,6 +136,10 @@ def _list_gateway_tools(db) -> List[Any]:
         name = (t.name or "").strip()
         if not name or name in _EXCLUDED_TOOL_NAMES:
             continue
+        if selected_skills is not None:
+            linked = skill_scoped.get(t.id)
+            if linked and not (linked & selected_skills):
+                continue  # skill-scoped tool whose skills weren't selected
         tool_id = t.id
         server_name = getattr(server, "name", None)
 
@@ -168,17 +214,24 @@ def build_server():
     _route_logging_to_stderr()
     _load_models()
     mcp = FastMCP(name="ND3X Gateway")
+    selected = _selected_skills_from_env()
     with SessionLocal() as db:
-        tools = _list_gateway_tools(db)
+        tools = _list_gateway_tools(db, selected)
         for tool in tools:
             mcp.add_tool(tool)
-    log.infox("MCP gateway (stdio) gebouwd", tool_count=len(tools))
+    log.infox("MCP gateway (stdio) gebouwd", tool_count=len(tools),
+              skill_scoped=selected is not None)
     return mcp
 
 
-def mcp_config_for_cli(*, python: str | None = None, cwd: str | None = None) -> Dict[str, Any]:
+def mcp_config_for_cli(*, python: str | None = None, cwd: str | None = None,
+                       selected_skills: List[str] | None = None) -> Dict[str, Any]:
     """The --mcp-config object the workflow engine writes for the CLI. Starts
-    this module as a stdio server under the same interpreter + source root."""
+    this module as a stdio server under the same interpreter + source root.
+
+    ``selected_skills`` (the turn's selected skill names) scopes skill-linked
+    tools: the child gateway then only exposes a linked tool when one of its
+    skills is in this list. None = no scoping (expose everything, legacy)."""
     py = python or sys.executable
     src_root = cwd or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     # Quiet the child at the source: stdout is the JSON-RPC stream, so keep ND3X
@@ -190,6 +243,8 @@ def mcp_config_for_cli(*, python: str | None = None, cwd: str | None = None) -> 
         "LOG_DB_ENABLED": "false",
         "LOG_FILE": "",
     }
+    if selected_skills is not None:
+        env["ND3X_GATEWAY_SKILLS"] = ",".join(s for s in selected_skills if s)
     # Delegation target: the child LISTS tools from the DB itself, but EXECUTES
     # them by calling back into this (main) process over HTTP, so stdio-backed
     # tools (Fabric/OneLake) and their Azure session run once, here. Without these
