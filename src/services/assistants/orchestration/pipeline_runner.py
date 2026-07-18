@@ -102,6 +102,70 @@ def _json(value: Any) -> str:
         return str(value)
 
 
+# -- Claude Code chat session (per ND3X thread) --------------------------------
+# The CLI-agent chat path keeps a Claude Code session so each turn sends only the
+# new message (via --resume) instead of re-flattening the whole history. We store
+# the CLI session id on the thread row's metadata, keyed by the ND3X thread id
+# (== the pipeline's session_id). All helpers degrade to "no resume" on any error,
+# so a missing thread row or DB hiccup just means we fall back to sending history.
+
+_CLI_SESSION_META_KEY = "cli_session_id"
+
+
+def _read_cli_session(db: Any, thread_id: Optional[str]) -> Optional[str]:
+    if not thread_id:
+        return None
+    try:
+        from models.assistant_thread import AssistantThreadModel
+        row = db.get(AssistantThreadModel, thread_id)
+        md = getattr(row, "metadata_", None) if row is not None else None
+        if isinstance(md, dict):
+            sid = md.get(_CLI_SESSION_META_KEY)
+            return str(sid) if sid else None
+    except Exception:  # noqa: BLE001 — never let session lookup break the turn
+        pass
+    return None
+
+
+def _write_cli_session(db: Any, thread_id: Optional[str], cli_session_id: Optional[str]) -> None:
+    if not thread_id or not cli_session_id:
+        return
+    try:
+        from models.assistant_thread import AssistantThreadModel
+        row = db.get(AssistantThreadModel, thread_id)
+        if row is None:
+            return
+        md = dict(getattr(row, "metadata_", None) or {})
+        if md.get(_CLI_SESSION_META_KEY) == cli_session_id:
+            return
+        md[_CLI_SESSION_META_KEY] = cli_session_id
+        row.metadata_ = md  # reassign (not in-place mutate) so SQLAlchemy tracks it
+        db.commit()
+    except Exception:  # noqa: BLE001
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _clear_cli_session(db: Any, thread_id: Optional[str]) -> None:
+    if not thread_id:
+        return
+    try:
+        from models.assistant_thread import AssistantThreadModel
+        row = db.get(AssistantThreadModel, thread_id)
+        md = dict(getattr(row, "metadata_", None) or {}) if row is not None else None
+        if md and _CLI_SESSION_META_KEY in md:
+            md.pop(_CLI_SESSION_META_KEY, None)
+            row.metadata_ = md
+            db.commit()
+    except Exception:  # noqa: BLE001
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _build_transcript_messages(
     assistant: Any, question: str, payload: Dict[str, Any], plan_prompt: str
 ) -> List[Dict[str, Any]]:
@@ -1038,48 +1102,81 @@ class AssistantPipelineRunner:
             try:
                 with SessionLocal() as _agent_db:
                     _agent = ClaudeCodeChatAgent(_agent_db)
-                    # Typed stream: the agent's interim text ('thinking') and its
-                    # tool calls go to the STEPS view via the same event types the
-                    # normal loop uses (agent_narration / tool_call), so no FE
-                    # change is needed. Only the 'answer' event becomes the chat
-                    # reply.
+                    # Continue the thread's Claude Code session when we have one:
+                    # send ONLY the new turn + --resume, so the whole history isn't
+                    # re-flattened (and past actions re-run) every turn. First turn —
+                    # or after a restart pruned the session — send the fenced history
+                    # and let the CLI mint a session id we then persist on the thread.
+                    _cli_sid = _read_cli_session(_agent_db, session_id)
+                    _agent_input = (question or "") if _cli_sid else _agent_msgs
                     _answer = ""
                     _narration = list(payload.get("_narration") or [])
-                    async for _ev in _agent.run_stream_events(
-                        user_input=_agent_msgs, model=_cc_model,
-                        skill_names=selected_skill_names,
-                        extra_instructions=_mem_block,
-                    ):
-                        _kind = _ev.get("kind")
-                        if _kind == "answer":
-                            _answer = _ev.get("text") or ""
-                            if progress_cb is not None:
-                                try:
-                                    progress_cb({
-                                        "type": "answer_partial", "turn_id": turn_id,
-                                        "assistant": assistant_name, "partial_answer": _answer,
-                                    })
-                                except Exception:  # noqa: BLE001
-                                    pass
-                        elif _kind == "thinking":
-                            _say = (_ev.get("text") or "").strip()
-                            if _say:
+                    _new_sid: Optional[str] = None
+                    _emitted = False
+
+                    async def _consume(_input: Any, _resume: Optional[str]) -> None:
+                        # Typed stream: 'thinking'/'tool' → STEPS view (same event
+                        # types as the normal loop), 'answer' → the chat reply,
+                        # 'session' → the CLI session id to persist.
+                        nonlocal _answer, _new_sid, _emitted
+                        async for _ev in _agent.run_stream_events(
+                            user_input=_input, model=_cc_model,
+                            skill_names=selected_skill_names,
+                            extra_instructions=_mem_block,
+                            resume_session_id=_resume,
+                        ):
+                            _kind = _ev.get("kind")
+                            if _kind == "session":
+                                _new_sid = _ev.get("id") or _new_sid
+                                continue
+                            if _kind == "answer":
+                                _emitted = True
+                                _answer = _ev.get("text") or ""
+                                if progress_cb is not None:
+                                    try:
+                                        progress_cb({
+                                            "type": "answer_partial", "turn_id": turn_id,
+                                            "assistant": assistant_name, "partial_answer": _answer,
+                                        })
+                                    except Exception:  # noqa: BLE001
+                                        pass
+                            elif _kind == "thinking":
+                                _say = (_ev.get("text") or "").strip()
+                                if _say:
+                                    _emitted = True
+                                    self.trace_fn(
+                                        trace, thread_id=session_id, turn_id=turn_id,
+                                        type="agent_narration", summary=_say,
+                                        data={"assistant": assistant_name, "say": _say},
+                                        progress_cb=progress_cb,
+                                    )
+                                    _narration.append({"kind": "say", "text": _say, "ts": time.time()})
+                            elif _kind == "tool":
+                                _emitted = True
+                                _tool = _ev.get("name") or "tool"
                                 self.trace_fn(
                                     trace, thread_id=session_id, turn_id=turn_id,
-                                    type="agent_narration", summary=_say,
-                                    data={"assistant": assistant_name, "say": _say},
+                                    type="tool_call", summary=f"Calling {_tool}",
+                                    data={"assistant": assistant_name, "tool": _tool},
                                     progress_cb=progress_cb,
                                 )
-                                _narration.append({"kind": "say", "text": _say, "ts": time.time()})
-                        elif _kind == "tool":
-                            _tool = _ev.get("name") or "tool"
-                            self.trace_fn(
-                                trace, thread_id=session_id, turn_id=turn_id,
-                                type="tool_call", summary=f"Calling {_tool}",
-                                data={"assistant": assistant_name, "tool": _tool},
-                                progress_cb=progress_cb,
-                            )
-                            _narration.append({"kind": "tool", "text": f"Using {_tool}", "ts": time.time()})
+                                _narration.append({"kind": "tool", "text": f"Using {_tool}", "ts": time.time()})
+
+                    try:
+                        await _consume(_agent_input, _cli_sid)
+                    except Exception:  # noqa: BLE001
+                        # A resume that produced no output (session pruned / restart)
+                        # → drop the stale id and retry once, fresh, with the fenced
+                        # history. If we already streamed output, re-raise instead of
+                        # retrying (would duplicate narration).
+                        if _cli_sid and not _emitted:
+                            _clear_cli_session(_agent_db, session_id)
+                            _new_sid = None
+                            await _consume(_agent_msgs, None)
+                        else:
+                            raise
+                    if _new_sid:
+                        _write_cli_session(_agent_db, session_id, _new_sid)
                     payload["_narration"] = _narration
                 # A FULLY schema-valid final plan (planner.schema.json requires
                 # all of these) so plan validation passes — a partial plan makes

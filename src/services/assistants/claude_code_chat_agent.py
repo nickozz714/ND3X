@@ -80,9 +80,43 @@ class ClaudeCodeChatAgent(CliAgentRunner):
 
     @staticmethod
     def _to_prompt(user_input: Any) -> str:
-        """Flatten the pipeline's plan_input (a conversation) into one prompt."""
-        from services.providers.claude_code_provider import _to_prompt
-        return _to_prompt(user_input)
+        """Build the chat-turn prompt from the pipeline's plan_input.
+
+        A plain string is the turn verbatim. For a multi-turn conversation we
+        fence the earlier turns as ALREADY-HANDLED context and mark only the last
+        user message as the current request. Without that split the autonomous
+        agent re-runs actions from earlier turns — e.g. asked only to change the
+        TV volume, it also re-issued a past "turn the living-room lights off"
+        because that instruction was still sitting in the flattened transcript.
+        """
+        from services.providers.claude_code_provider import _to_prompt as _flatten
+        if isinstance(user_input, str):
+            return user_input
+        msgs = list(user_input or [])
+        if not msgs:
+            return ""
+        # The current request = the last user message; everything before it is
+        # already-handled history.
+        last_idx = None
+        for i in range(len(msgs) - 1, -1, -1):
+            if (msgs[i].get("role") or "user").strip().lower() == "user":
+                last_idx = i
+                break
+        if last_idx is None:
+            return _flatten(msgs)  # no user turn found — keep the old behaviour
+        current = _flatten([msgs[last_idx]])
+        if current.startswith("User:\n"):
+            current = current[len("User:\n"):]  # we label it ourselves below
+        history = msgs[:last_idx]
+        if not history:
+            return current
+        return (
+            "## Conversation so far — context only. These turns are ALREADY "
+            "handled; do NOT repeat or re-run any of their actions.\n\n"
+            f"{_flatten(history)}\n\n"
+            "## Current request — the ONLY thing to act on now:\n\n"
+            f"{current}"
+        )
 
     def _skill_instructions_block(self, skill_names: Optional[List[str]]) -> str:
         """Render the how-to instructions of the turn's selected skills so the
@@ -135,15 +169,17 @@ class ClaudeCodeChatAgent(CliAgentRunner):
         model: Optional[str] = None,
         extra_instructions: Optional[str] = None,
         skill_names: Optional[List[str]] = None,
+        resume_session_id: Optional[str] = None,
     ) -> str:
         """Run the turn and return the agent's natural-language answer."""
         provider, instructions, mcp_config_path, cc_model = self._prepare(model, extra_instructions, skill_names)
         prompt = self._to_prompt(user_input)
         log.infox("Claude Code chat-agent run gestart",
                   has_nd3x_tools=mcp_config_path is not None, prompt_chars=len(prompt or ""),
-                  skills=skill_names or [], model=cc_model)
+                  skills=skill_names or [], model=cc_model, resume=bool(resume_session_id))
         try:
-            result = await provider.chat(prompt, instructions=instructions, model=cc_model)
+            result = await provider.chat(prompt, instructions=instructions, model=cc_model,
+                                         resume_session_id=resume_session_id)
         finally:
             if mcp_config_path:
                 try:
@@ -160,15 +196,20 @@ class ClaudeCodeChatAgent(CliAgentRunner):
         model: Optional[str] = None,
         extra_instructions: Optional[str] = None,
         skill_names: Optional[List[str]] = None,
+        resume_session_id: Optional[str] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
-        """Stream typed agent events: 'thinking'/'tool' (the agent working — for
-        the steps view) vs 'answer' (the final reply — for the chat)."""
+        """Stream typed agent events: 'session' (the CLI session id to persist),
+        'thinking'/'tool' (the agent working — for the steps view) and 'answer'
+        (the final reply — for the chat)."""
         provider, instructions, mcp_config_path, cc_model = self._prepare(model, extra_instructions, skill_names)
         prompt = self._to_prompt(user_input)
         log.infox("Claude Code chat-agent event-stream gestart",
-                  has_nd3x_tools=mcp_config_path is not None, skills=skill_names or [], model=cc_model)
+                  has_nd3x_tools=mcp_config_path is not None, skills=skill_names or [],
+                  model=cc_model, resume=bool(resume_session_id))
         try:
-            async for ev in provider.chat_stream_events(prompt, instructions=instructions, model=cc_model):
+            async for ev in provider.chat_stream_events(prompt, instructions=instructions,
+                                                        model=cc_model,
+                                                        resume_session_id=resume_session_id):
                 yield ev
         finally:
             if mcp_config_path:

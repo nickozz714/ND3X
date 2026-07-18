@@ -164,3 +164,50 @@ def test_router_chat_provider_type():
     # None resolution → OpenAI base path.
     r2 = LLMRouter(None, resolve_chat_provider=lambda model, role: None)
     assert r2.chat_provider_type(None, "chat.planner") is None
+
+
+def test_to_prompt_fences_history_and_marks_current_turn():
+    """Multi-turn: earlier turns are fenced as already-handled context and only
+    the last user message is the current request (so the agent won't re-run past
+    actions). Single turn / plain string pass through unchanged."""
+    out = ClaudeCodeChatAgent._to_prompt([
+        {"role": "user", "content": "zet de woonkamer lampen uit"},
+        {"role": "assistant", "content": "Done ✅"},
+        {"role": "user", "content": "zet het tv-volume 2 omhoog"},
+    ])
+    assert "## Current request" in out
+    assert "ALREADY" in out  # history fenced as handled
+    assert out.rstrip().endswith("zet het tv-volume 2 omhoog")
+    # the past instruction is present as context but AFTER the fence header, not
+    # as the standalone task
+    assert out.index("woonkamer lampen uit") < out.index("## Current request")
+    # single user turn → no fencing; plain string → verbatim
+    assert ClaudeCodeChatAgent._to_prompt([{"role": "user", "content": "hoi"}]) == "hoi"
+    assert ClaudeCodeChatAgent._to_prompt("plain") == "plain"
+
+
+def test_run_stream_events_forwards_resume_session_id(monkeypatch, db):
+    _add_cc(db)
+    captured: dict = {}
+
+    async def fake_stream(self, user_input, **kwargs):
+        captured["resume"] = kwargs.get("resume_session_id")
+        captured["prompt"] = user_input
+        yield {"kind": "session", "id": "sess-out"}
+        yield {"kind": "answer", "text": "ok"}
+
+    import services.providers.claude_code_provider as ccp
+    monkeypatch.setattr(ccp.ClaudeCodeChatProvider, "chat_stream_events", fake_stream)
+    monkeypatch.setattr(ClaudeCodeChatAgent, "write_gateway_config",
+                        staticmethod(lambda *a, **k: "/tmp/fake-chat-mcp.json"))
+    monkeypatch.setattr(cca.os, "unlink", lambda p: None)
+
+    async def go():
+        return [ev async for ev in ClaudeCodeChatAgent(db).run_stream_events(
+            user_input="zet volume +2", resume_session_id="sess-9")]
+
+    evs = asyncio.run(go())
+    assert captured["resume"] == "sess-9"
+    assert captured["prompt"] == "zet volume +2"  # only the new turn on resume
+    assert any(e.get("kind") == "session" and e.get("id") == "sess-out" for e in evs)
+    assert any(e.get("kind") == "answer" for e in evs)
