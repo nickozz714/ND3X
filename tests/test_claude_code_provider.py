@@ -194,6 +194,28 @@ def test_build_env_strips_api_key_and_injects_token(monkeypatch):
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in ClaudeCodeChatProvider()._build_env()
 
 
+def test_oauth_token_strips_embedded_whitespace():
+    # A setup-token pasted from a wrapped terminal can carry an embedded newline;
+    # the CLI rejects that as invalid. The provider strips ALL whitespace.
+    p = ClaudeCodeChatProvider(oauth_token="sk-ant-oat01-AB\nCD 12\t34")
+    assert p._oauth_token == "sk-ant-oat01-ABCD1234"
+    assert ClaudeCodeChatProvider(oauth_token="  \n ")._oauth_token is None
+
+
+def test_build_env_sets_is_sandbox_as_root(monkeypatch):
+    # As root, the CLI refuses --permission-mode bypassPermissions unless IS_SANDBOX
+    # is set. The provider marks it so the containerized (root) deploy works.
+    monkeypatch.setattr("os.geteuid", lambda: 0, raising=False)
+    assert ClaudeCodeChatProvider()._build_env().get("IS_SANDBOX") == "1"
+    # Non-root: don't touch it (bypassPermissions is allowed for non-root).
+    monkeypatch.setattr("os.geteuid", lambda: 1000, raising=False)
+    assert "IS_SANDBOX" not in ClaudeCodeChatProvider()._build_env()
+    # An explicit IS_SANDBOX is respected (root, but preset).
+    monkeypatch.setattr("os.geteuid", lambda: 0, raising=False)
+    monkeypatch.setenv("IS_SANDBOX", "0")
+    assert ClaudeCodeChatProvider()._build_env()["IS_SANDBOX"] == "0"
+
+
 def test_build_env_strips_nested_claude_code_session(monkeypatch):
     # ND3X launched from inside a Claude Code session (dev): the nested CLI
     # must not inherit that session's harness (it injects extra tools the
@@ -320,6 +342,52 @@ def test_chat_stream_error_result_raises(monkeypatch):
     _patch_spawn(monkeypatch, _FakeProc(stdout=lines), {})
     with pytest.raises(RuntimeError, match="error_max_turns"):
         asyncio.run(_collect(ClaudeCodeChatProvider(default_model="sonnet"), "x"))
+
+
+# ------------------------------------------------- session resume (--resume)
+
+
+def test_build_cmd_adds_resume_flag_only_when_given():
+    p = ClaudeCodeChatProvider(default_model="opus", agentic=True)
+    cmd = p._build_cmd("opus", None, "sess-xyz")
+    i = cmd.index("--resume")
+    assert cmd[i:i + 2] == ["--resume", "sess-xyz"]
+    assert "--resume" not in p._build_cmd("opus", None)  # none → no flag
+
+
+def test_chat_passes_resume_and_returns_session_id(monkeypatch):
+    proc = _FakeProc(stdout=json.dumps(_result_envelope(session_id="sess-new")).encode())
+    captured: dict = {}
+    _patch_spawn(monkeypatch, proc, captured)
+    res = asyncio.run(
+        ClaudeCodeChatProvider(default_model="opus", agentic=True).chat(
+            "hoi", resume_session_id="sess-old"))
+    assert res.response_id == "sess-new"  # the id to persist for next turn
+    i = captured["cmd"].index("--resume")
+    assert captured["cmd"][i:i + 2] == ["--resume", "sess-old"]
+
+
+async def _collect_events(p: ClaudeCodeChatProvider, prompt: str, **kw) -> list[dict]:
+    return [ev async for ev in p.chat_stream_events(prompt, **kw)]
+
+
+def test_chat_stream_events_yields_session_and_forwards_resume(monkeypatch):
+    lines = _stream_lines(
+        {"type": "system", "subtype": "init", "session_id": "sess-abc"},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "home_tv_volume", "input": {"step": 2}}]}},
+        _result_envelope(result="klaar", session_id="sess-abc"),
+    )
+    proc = _FakeProc(stdout=lines)
+    captured: dict = {}
+    _patch_spawn(monkeypatch, proc, captured)
+    p = ClaudeCodeChatProvider(default_model="opus", agentic=True)
+    evs = asyncio.run(_collect_events(p, "zet volume +2", resume_session_id="sess-abc"))
+    assert any(e.get("kind") == "session" and e.get("id") == "sess-abc" for e in evs)
+    assert any(e.get("kind") == "tool" and e.get("name") == "home_tv_volume" for e in evs)
+    assert any(e.get("kind") == "answer" and e.get("text") == "klaar" for e in evs)
+    i = captured["cmd"].index("--resume")
+    assert captured["cmd"][i:i + 2] == ["--resume", "sess-abc"]
 
 
 # ------------------------------------------------- factory/discovery/health

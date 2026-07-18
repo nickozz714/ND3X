@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from component.logging import get_logger
@@ -219,7 +220,10 @@ class ClaudeCodeChatProvider(ChatProvider):
         native_bash: bool = False,
     ):
         self._default_model = default_model
-        self._oauth_token = (oauth_token or "").strip() or None
+        # Strip ALL whitespace, not just the ends: a setup-token pasted from a
+        # wrapped terminal can carry an embedded newline/space, which the CLI
+        # rejects as "OAuth access token is invalid". Tokens never contain spaces.
+        self._oauth_token = re.sub(r"\s", "", oauth_token or "") or None
         self._cli_path = (cli_path or "claude").strip() or "claude"
         self._agentic = bool(agentic)
         self._max_turns = max_turns
@@ -250,10 +254,24 @@ class ClaudeCodeChatProvider(ChatProvider):
         }
         if self._oauth_token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = self._oauth_token
+        # We run the CLI with --permission-mode bypassPermissions so it never
+        # blocks on an interactive prompt (headless). The CLI refuses that as root
+        # unless IS_SANDBOX is set. ND3X's container runs as root and the agent's
+        # own shell/file tools are disabled (native_* off — ND3X executes tools),
+        # so mark the sandbox to keep the containerized deploy working.
+        if (env.get("IS_SANDBOX") is None
+                and hasattr(os, "geteuid") and os.geteuid() == 0):
+            env["IS_SANDBOX"] = "1"
         return env
 
-    def _build_cmd(self, model_id: str, instructions: Optional[str]) -> List[str]:
+    def _build_cmd(self, model_id: str, instructions: Optional[str],
+                   resume_session_id: Optional[str] = None) -> List[str]:
         cmd = [self._cli_path, "-p", "--model", model_id]
+        # Resume an existing Claude Code session: the CLI replays that session's
+        # own conversation, so ND3X sends only the NEW turn instead of re-flattening
+        # the whole history each turn (fewer tokens; no re-running past actions).
+        if resume_session_id:
+            cmd += ["--resume", resume_session_id]
         if self._agentic:
             if instructions:
                 cmd += ["--append-system-prompt", instructions]
@@ -343,17 +361,20 @@ class ClaudeCodeChatProvider(ChatProvider):
         top_p: Optional[float] = None,
         max_output_tokens: Optional[int] = None,
         metadata: Optional[Dict[str, str]] = None,
+        resume_session_id: Optional[str] = None,
         **kwargs: Any,
     ) -> ChatResult:
         """One headless CLI run: prompt in via stdin, JSON result envelope out.
 
         temperature/top_p/max_output_tokens have no CLI equivalent and are
         ignored; response_format is ignored (supports_structured_output=False,
-        the router never sends it here).
+        the router never sends it here). ``resume_session_id`` continues a prior
+        Claude Code session (send only the new turn); the returned ``response_id``
+        is the (possibly new) session id to persist for the next turn.
         """
         model_id = model or self._default_model
         prompt = _to_prompt(user_input)
-        cmd = self._build_cmd(model_id, instructions) + ["--output-format", "json"]
+        cmd = self._build_cmd(model_id, instructions, resume_session_id) + ["--output-format", "json"]
 
         proc = await self._spawn(cmd)
         try:
@@ -433,12 +454,15 @@ class ClaudeCodeChatProvider(ChatProvider):
         *,
         model: Optional[str] = None,
         instructions: Optional[str] = None,
+        resume_session_id: Optional[str] = None,
         **kwargs: Any,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Typed agent-run events, distinguishing PROCESS from ANSWER (for the
         agentic chat: process → the steps view, answer → the chat reply).
 
         Yields dicts:
+          {"kind": "session", "id": ...}     the Claude Code session id (persist it
+                                             to resume this thread on the next turn).
           {"kind": "thinking", "text": ...}  interim assistant text (accompanying
                                              a tool step) — what the agent 'says'
                                              while working.
@@ -447,7 +471,7 @@ class ClaudeCodeChatProvider(ChatProvider):
         """
         model_id = model or self._default_model
         prompt = _to_prompt(user_input)
-        cmd = self._build_cmd(model_id, instructions) + ["--output-format", "stream-json", "--verbose"]
+        cmd = self._build_cmd(model_id, instructions, resume_session_id) + ["--output-format", "stream-json", "--verbose"]
 
         proc = await self._spawn(cmd)
         answer_fallback: List[str] = []
@@ -475,6 +499,13 @@ class ClaudeCodeChatProvider(ChatProvider):
                 except Exception:  # noqa: BLE001
                     continue
                 otype = obj.get("type")
+                if otype == "system":
+                    # The init event carries the session id — surface it early so
+                    # the caller can persist it to resume this thread next turn.
+                    _sid = obj.get("session_id")
+                    if _sid:
+                        yield {"kind": "session", "id": str(_sid)}
+                    continue
                 if otype == "assistant":
                     content = (obj.get("message") or {}).get("content") or []
                     has_tool = any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content)
@@ -497,6 +528,9 @@ class ClaudeCodeChatProvider(ChatProvider):
                         raise RuntimeError(
                             f"Claude Code gaf een fout terug ({obj.get('subtype')}): "
                             f"{str(obj.get('result') or '')[:400]}")
+                    _sid = obj.get("session_id")
+                    if _sid:
+                        yield {"kind": "session", "id": str(_sid)}
                     usage = obj.get("usage") or {}
                     answer = obj.get("result")
                     yield {"kind": "answer", "text": (answer if isinstance(answer, str) else "".join(answer_fallback))}
