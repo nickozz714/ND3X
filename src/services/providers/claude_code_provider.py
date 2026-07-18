@@ -250,6 +250,14 @@ class ClaudeCodeChatProvider(ChatProvider):
         }
         if self._oauth_token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = self._oauth_token
+        # We run the CLI with --permission-mode bypassPermissions so it never
+        # blocks on an interactive prompt (headless). The CLI refuses that as root
+        # unless IS_SANDBOX is set. ND3X's container runs as root and the agent's
+        # own shell/file tools are disabled (native_* off — ND3X executes tools),
+        # so mark the sandbox to keep the containerized deploy working.
+        if (env.get("IS_SANDBOX") is None
+                and hasattr(os, "geteuid") and os.geteuid() == 0):
+            env["IS_SANDBOX"] = "1"
         return env
 
     def _build_cmd(self, model_id: str, instructions: Optional[str]) -> List[str]:
