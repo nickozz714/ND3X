@@ -97,3 +97,79 @@ def test_mcp_config_for_cli_shape():
     assert server["env"]["LOG_LEVEL"] == "ERROR"
     assert server["env"]["LOG_DB_ENABLED"] == "false"
     assert "PYTHONPATH" in server["env"]
+
+
+# ---------------------------------------------------------- skill scoping
+
+
+def _skill(db, name, enabled=True):
+    from datetime import datetime
+    import models.skill as skill_model
+    s = skill_model.Skill(name=name, description=f"{name} desc", is_enabled=enabled,
+                          created_at=datetime.utcnow(), updated_at=datetime.utcnow())
+    db.add(s); db.commit()
+    return s
+
+
+def _link(db, skill, tool, enabled=True):
+    import models.skill_tool as st_model
+    link = st_model.SkillTool(skill_id=skill.id, tool_id=tool.id, is_enabled=enabled)
+    db.add(link); db.commit()
+    return link
+
+
+def test_gateway_none_selection_exposes_everything(db):
+    srv = _server(db, "Builtin")
+    t_free = _tool(db, srv, "board_pull")
+    t_linked = _tool(db, srv, "workflow__generate")
+    _link(db, _skill(db, "workflow_building"), t_linked)
+    names = {t.name for t in mcp_gateway._list_gateway_tools(db, None)}
+    assert {"board_pull", "workflow__generate"} <= names  # legacy: no filtering
+
+
+def test_gateway_scopes_linked_tools_to_selected_skills(db):
+    srv = _server(db, "Builtin")
+    t_free = _tool(db, srv, "board_pull")
+    t_wf = _tool(db, srv, "workflow__generate")
+    t_transfer = _tool(db, srv, "transfer_create_route")
+    _link(db, _skill(db, "workflow_building"), t_wf)
+    _link(db, _skill(db, "transfer_route_building"), t_transfer)
+
+    # No skills selected → only unlinked tools.
+    names = {t.name for t in mcp_gateway._list_gateway_tools(db, set())}
+    assert "board_pull" in names
+    assert "workflow__generate" not in names and "transfer_create_route" not in names
+
+    # workflow skill selected → its tools appear; the other skill's stay hidden.
+    names = {t.name for t in mcp_gateway._list_gateway_tools(db, {"workflow_building"})}
+    assert {"board_pull", "workflow__generate"} <= names
+    assert "transfer_create_route" not in names
+
+
+def test_gateway_disabled_link_or_skill_means_always_on(db):
+    """A DISABLED link/skill doesn't scope the tool — it stays always-on rather
+    than silently vanishing."""
+    srv = _server(db, "Builtin")
+    t1 = _tool(db, srv, "tool_disabled_link")
+    t2 = _tool(db, srv, "tool_disabled_skill")
+    _link(db, _skill(db, "some_skill"), t1, enabled=False)
+    _link(db, _skill(db, "off_skill", enabled=False), t2)
+    names = {t.name for t in mcp_gateway._list_gateway_tools(db, set())}
+    assert {"tool_disabled_link", "tool_disabled_skill"} <= names
+
+
+def test_selected_skills_env_parsing(monkeypatch):
+    monkeypatch.delenv("ND3X_GATEWAY_SKILLS", raising=False)
+    assert mcp_gateway._selected_skills_from_env() is None      # absent → no filtering
+    monkeypatch.setenv("ND3X_GATEWAY_SKILLS", "")
+    assert mcp_gateway._selected_skills_from_env() == set()      # empty → strict
+    monkeypatch.setenv("ND3X_GATEWAY_SKILLS", "workflow_building, transfer_route_building")
+    assert mcp_gateway._selected_skills_from_env() == {"workflow_building", "transfer_route_building"}
+
+
+def test_mcp_config_for_cli_carries_selected_skills():
+    cfg = mcp_gateway.mcp_config_for_cli(selected_skills=["workflow_building"])
+    env = cfg["mcpServers"]["nd3x"]["env"]
+    assert env["ND3X_GATEWAY_SKILLS"] == "workflow_building"
+    cfg2 = mcp_gateway.mcp_config_for_cli()  # None → var absent → legacy
+    assert "ND3X_GATEWAY_SKILLS" not in cfg2["mcpServers"]["nd3x"]["env"]

@@ -149,7 +149,10 @@ class ClaudeCodeChatAgent(CliAgentRunner):
         Claude-coerced model to use (a non-Claude pin can't run in the CLI)."""
         from services.providers.claude_code_provider import claude_code_model
         cc_model = claude_code_model(model)
-        mcp_config_path = self.write_gateway_config("nd3x-mcp-chat-")
+        # Skill-scoped gateway: skill-linked tools are only exposed when their
+        # skill was selected for this turn (unlinked tools stay always-on).
+        mcp_config_path = self.write_gateway_config(
+            "nd3x-mcp-chat-", skill_names=[str(n) for n in (skill_names or [])])
         provider = self._build_provider(cc_model, mcp_config_path)
         instructions = _agent_instruction()
         # Dynamic ND3X inventory (connected MCP servers, skill catalog, selected
