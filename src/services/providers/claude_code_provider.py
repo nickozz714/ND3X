@@ -112,6 +112,10 @@ ND3X_AGENT_PREAMBLE = (
     "search, file editing) only for general work with no ND3X equivalent. Do not "
     "use your own Skill/Task/Cron/schedule tools for this — ND3X skills and "
     "scheduling ARE the `mcp__nd3x__` tools.\n\n"
+    "There can be many `mcp__nd3x__` tools and they load on demand: use tool "
+    "search to find the right one by name or purpose, then call it directly. You "
+    "never need to pre-select a skill or hand ND3X work to a sub-agent just to "
+    "reach its tools — every skill's tools are already available to you.\n\n"
     "Scheduling, night-runs, workflows and deployments are ND3X concepts managed "
     "through the `mcp__nd3x__` tools and the agent board — NOT the host operating "
     "system's crontab or shell. Never reach for the host OS to change them.\n\n"
@@ -279,6 +283,12 @@ class ClaudeCodeChatProvider(ChatProvider):
         if (env.get("IS_SANDBOX") is None
                 and hasattr(os, "geteuid") and os.geteuid() == 0):
             env["IS_SANDBOX"] = "1"
+        # Route 3 — deferred MCP tools. The ND3X gateway exposes every enabled
+        # tool (100+), so keep their schemas OUT of the eager context: with tool
+        # search on, the CLI loads only names+descriptions and fetches a schema on
+        # demand. Exposing every skill's tools then costs almost nothing until one
+        # is used. Respect an explicit operator override (e.g. "auto"/"auto:N").
+        env.setdefault("ENABLE_TOOL_SEARCH", "true")
         return env
 
     def _build_cmd(self, model_id: str, instructions: Optional[str],

@@ -84,10 +84,13 @@ def test_run_is_agentic_with_gateway(monkeypatch, db):
     assert "mcp__nd3x" in capture["instructions"]
 
 
-def test_run_includes_selected_skill_instructions(monkeypatch, db):
+def test_run_surfaces_all_domain_skill_guidance(monkeypatch, db):
+    # Route 3 (deferred tools): every enabled domain skill's tools are reachable
+    # via tool search, so ALL of their how-to guidance is surfaced — not just a
+    # pre-selected subset. skill_names no longer gates which guidance appears.
     _add_cc(db)
     _add_skill(db, "fabric_query", "Always call fabric_list_workspaces before answering.")
-    _add_skill(db, "unused", "Should not appear.")
+    _add_skill(db, "serietracker", "Resolve a title with st_search before st_add_show.")
     capture: dict = {}
 
     async def fake_chat(self, user_input, **kwargs):
@@ -98,10 +101,37 @@ def test_run_includes_selected_skill_instructions(monkeypatch, db):
     monkeypatch.setattr(ccp.ClaudeCodeChatProvider, "chat", fake_chat)
     monkeypatch.setattr(ClaudeCodeChatAgent, "write_gateway_config", staticmethod(lambda *a, **k: None))
 
-    asyncio.run(ClaudeCodeChatAgent(db).run(user_input="q", skill_names=["fabric_query"]))
+    # No skill_names passed: both enabled domain skills' guidance still shows.
+    asyncio.run(ClaudeCodeChatAgent(db).run(user_input="q"))
     instr = capture["instructions"]
     assert "fabric_query" in instr and "fabric_list_workspaces" in instr
-    assert "Should not appear" not in instr  # only selected skills
+    assert "serietracker" in instr and "st_search" in instr
+
+
+def test_gateway_config_is_not_skill_scoped(monkeypatch, db):
+    # Route 3: the CLI gateway exposes ALL enabled tools; the chat agent must NOT
+    # pass a skill scope (that would filter skill-linked tools back out and force
+    # the ToolSearch-thrash / subagent detour this change removes).
+    _add_cc(db)
+    _add_skill(db, "serietracker", "Guidance.")
+    seen: dict = {}
+
+    def fake_write(prefix="nd3x-mcp-", skill_names=None):
+        seen["called"] = True
+        seen["skill_names"] = skill_names
+        return None
+
+    async def fake_chat(self, user_input, **kwargs):
+        return ChatResult(text="ok", provider="claude_code", model="opus")
+
+    import services.providers.claude_code_provider as ccp
+    monkeypatch.setattr(ccp.ClaudeCodeChatProvider, "chat", fake_chat)
+    monkeypatch.setattr(ClaudeCodeChatAgent, "write_gateway_config", staticmethod(fake_write))
+
+    # A skill is passed, but the gateway is still built unscoped (expose all).
+    asyncio.run(ClaudeCodeChatAgent(db).run(user_input="q", skill_names=["serietracker"]))
+    assert seen.get("called") is True
+    assert not seen.get("skill_names")  # None/empty → expose everything (deferred)
 
 
 def test_run_stream_events_separates_thinking_from_answer(monkeypatch, db):

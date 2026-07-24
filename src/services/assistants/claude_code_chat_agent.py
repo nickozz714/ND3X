@@ -121,9 +121,32 @@ class ClaudeCodeChatAgent(CliAgentRunner):
             f"{current}"
         )
 
+    # How-to guidance is the small, bounded layer (a few skills × ~1–5 KB), so it
+    # loads eagerly like an MCP server's instructions; the many TOOL schemas are
+    # the expensive part and those stay deferred (tool search). Cap the total so a
+    # large skill library can't blow up the prompt.
+    _SKILL_GUIDE_BUDGET = 16000
+
+    def _enabled_domain_skill_names(self) -> List[str]:
+        """All enabled, selectable domain skills (not system/runtime). Route 3
+        exposes every skill's tools to the CLI (deferred), so the agent may reach
+        for any of them — hence we surface all their how-to guidance, not just a
+        pre-selected subset."""
+        try:
+            from models.skill import Skill
+            rows = (self.db.query(Skill)
+                    .filter(Skill.is_enabled == True,   # noqa: E712
+                            Skill.is_system == False,    # noqa: E712
+                            Skill.is_runtime == False)   # noqa: E712
+                    .order_by(Skill.name.asc()).all())
+            return [s.name for s in rows if s.name]
+        except Exception:  # noqa: BLE001 — never break the turn on a catalog probe
+            return []
+
     def _skill_instructions_block(self, skill_names: Optional[List[str]]) -> str:
-        """Render the how-to instructions of the turn's selected skills so the
-        agent knows how to use ND3X's skill tools, not just that they exist."""
+        """Render the how-to instructions of the given skills so the agent knows
+        how to use ND3X's skill tools, not just that they exist. Bounded by
+        ``_SKILL_GUIDE_BUDGET`` so a big skill library stays affordable."""
         names = [str(n).strip() for n in (skill_names or []) if str(n).strip()]
         if not names:
             return ""
@@ -133,14 +156,26 @@ class ClaudeCodeChatAgent(CliAgentRunner):
         except Exception:  # noqa: BLE001
             return ""
         parts: List[str] = []
+        used = 0
+        truncated = False
         for s in rows:
             instr = (getattr(s, "instructions", "") or "").strip()
-            if instr:
-                parts.append(f"### Skill: {s.name}\n{instr}")
+            if not instr:
+                continue
+            block = f"### Skill: {s.name}\n{instr}"
+            if used + len(block) > self._SKILL_GUIDE_BUDGET:
+                truncated = True
+                continue
+            parts.append(block)
+            used += len(block)
         if not parts:
             return ""
-        return ("Active ND3X skills for this turn — follow their guidance when "
-                "using the related mcp__nd3x tools:\n\n" + "\n\n".join(parts))
+        head = ("ND3X skill guidance — how to use each skill's mcp__nd3x tools. "
+                "Discover a tool's schema with tool search, then call it directly:")
+        if truncated:
+            head += ("\n(Some skills' guidance was omitted to stay within budget; "
+                     "consult a skill's own files if it has them.)")
+        return head + "\n\n" + "\n\n".join(parts)
 
     def _prepare(self, model: Optional[str], extra_instructions: Optional[str],
                  skill_names: Optional[List[str]]):
@@ -149,19 +184,25 @@ class ClaudeCodeChatAgent(CliAgentRunner):
         Claude-coerced model to use (a non-Claude pin can't run in the CLI)."""
         from services.providers.claude_code_provider import claude_code_model
         cc_model = claude_code_model(model)
-        # Skill-scoped gateway: skill-linked tools are only exposed when their
-        # skill was selected for this turn (unlinked tools stay always-on).
-        mcp_config_path = self.write_gateway_config(
-            "nd3x-mcp-chat-", skill_names=[str(n) for n in (skill_names or [])])
+        # Route 3 — deferred tools: expose ALL enabled ND3X tools to the CLI (no
+        # per-skill gateway scoping). With tool search on, the CLI keeps only tool
+        # names+descriptions in context and fetches a tool's schema on demand, so
+        # the agent can call any skill's tools DIRECTLY — no pre-selection and no
+        # subagent detour to reach a skill that wasn't picked up front. The passed
+        # ``skill_names`` no longer gates tools; it's kept for callers/compat.
+        mcp_config_path = self.write_gateway_config("nd3x-mcp-chat-")
         provider = self._build_provider(cc_model, mcp_config_path)
         instructions = _agent_instruction()
-        # Dynamic ND3X inventory (connected MCP servers, skill catalog, selected
-        # skills' file roots) — keeps the static preamble current from the DB.
+        # Since every skill's tools are now reachable, surface every enabled domain
+        # skill (catalog + file roots + how-to), not just a pre-selected subset.
+        domain_skills = self._enabled_domain_skill_names()
+        # Dynamic ND3X inventory (connected MCP servers, skill catalog, skills'
+        # file roots) — keeps the static preamble current from the DB.
         from services.providers.nd3x_agent_context import build_nd3x_context_block
-        nd3x_ctx = build_nd3x_context_block(self.db, selected_skill_names=skill_names)
+        nd3x_ctx = build_nd3x_context_block(self.db, selected_skill_names=domain_skills)
         if nd3x_ctx:
             instructions = f"{instructions}\n\n{nd3x_ctx}"
-        skills_block = self._skill_instructions_block(skill_names)
+        skills_block = self._skill_instructions_block(domain_skills)
         if skills_block:
             instructions = f"{instructions}\n\n{skills_block}"
         if extra_instructions:
