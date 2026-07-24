@@ -100,7 +100,11 @@ def test_workflow_create_persists_agent_design(db, monkeypatch):
     assert ops[1].depends_on == [ops[0].id]             # linear chain (service maps position → id)
 
 
-def test_workflow_create_validates_input(monkeypatch):
+def test_workflow_create_validates_input(monkeypatch, db):
+    # Hermetic: the operations check opens SessionLocal (initialising the
+    # Assistant mapper), so bind it to the in-memory fixture DB instead of the
+    # ambient app DB — which in CI has no tables ("no such table: assistant").
+    monkeypatch.setattr("db.database.SessionLocal", lambda: _NonClosing(db))
     import services.builtin.tools.workflow_tools as wt
     assert asyncio.run(wt.workflow_create({}))["status"] == "error"
     assert asyncio.run(wt.workflow_create({"name": "x"}))["status"] == "error"
