@@ -216,6 +216,16 @@ def test_build_env_sets_is_sandbox_as_root(monkeypatch):
     assert ClaudeCodeChatProvider()._build_env()["IS_SANDBOX"] == "0"
 
 
+def test_build_env_enables_tool_search_by_default(monkeypatch):
+    # Route 3: the ND3X gateway exposes every enabled tool (100+), so tool search
+    # must be on to keep their schemas out of the eager context.
+    monkeypatch.delenv("ENABLE_TOOL_SEARCH", raising=False)
+    assert ClaudeCodeChatProvider()._build_env()["ENABLE_TOOL_SEARCH"] == "true"
+    # An explicit operator override (e.g. threshold mode) is respected.
+    monkeypatch.setenv("ENABLE_TOOL_SEARCH", "auto:5")
+    assert ClaudeCodeChatProvider()._build_env()["ENABLE_TOOL_SEARCH"] == "auto:5"
+
+
 def test_build_env_strips_nested_claude_code_session(monkeypatch):
     # ND3X launched from inside a Claude Code session (dev): the nested CLI
     # must not inherit that session's harness (it injects extra tools the
