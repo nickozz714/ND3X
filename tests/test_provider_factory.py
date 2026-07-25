@@ -148,6 +148,40 @@ def test_forced_chat_model_overrides_slot(db):
     assert router._resolve_chat("gpt-4.1-mini", "assistant:Foo") is not None
 
 
+def test_forced_pick_does_not_hijack_utility_slots(db):
+    # A chat-picker model drives the conversation ANSWER but must leave the cheap
+    # utility/decision slots (memory_decision, cognition) on their own assignment.
+    from services.providers.chat_session import forced_chat_model
+    from services.providers.anthropic_provider import AnthropicChatProvider
+    from services.providers.ollama_provider import OllamaChatProvider
+    reg = ProviderRegistryService(db)
+    op = reg.create_provider(ProviderCreate(name="Ollama", provider_type="ollama",
+                                            base_url="http://localhost:11434/v1", is_local=True))
+    om = reg.create_model(ProviderModelCreate(provider_id=op.id, model_id="qwen2.5:14b", capability="chat"))
+    reg.set_assignment("chat.planner", om.id)
+    reg.set_assignment("chat.cognition", om.id)
+    reg.set_assignment("chat.memory_decision", om.id)
+    ap = reg.create_provider(ProviderCreate(name="Anthropic", provider_type="anthropic", api_key="k"))
+    reg.create_model(ProviderModelCreate(provider_id=ap.id, model_id="claude-opus-4-8", capability="chat"))
+
+    router = build_llm_router(_FakeOpenAI(), db)
+    tok = forced_chat_model.set("claude-opus-4-8")
+    try:
+        # Answer role: the forced pick wins (unchanged).
+        ans = router._resolve_chat("gpt-4.1-mini", "assistant:Foo")
+        assert ans is not None and isinstance(ans[0], AnthropicChatProvider)
+        assert ans[1] == "claude-opus-4-8"
+        # Utility/decision roles: forced pick IGNORED -> their own slot (qwen).
+        for role in ("cognition:Extractor", "memory_decision:retrieval"):
+            r = router._resolve_chat("gpt-4.1-mini", role)
+            assert r is not None and isinstance(r[0], OllamaChatProvider), role
+            assert r[1] == "qwen2.5:14b", role
+        assert router._resolve_chat_model("gpt-4.1-mini", "cognition:X") == "qwen2.5:14b"
+        assert router._resolve_chat_model("gpt-4.1-mini", "assistant:Foo") == "claude-opus-4-8"
+    finally:
+        forced_chat_model.reset(tok)
+
+
 def test_forced_model_from_input_payload_honored_for_non_openai(db):
     """The audit `input_payload.forced_model` path flows into `forced_chat_model`
     and is honored for a non-OpenAI (here: openai_compatible/Ollama) provider —
