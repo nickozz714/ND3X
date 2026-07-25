@@ -59,6 +59,18 @@ def role_to_slot(role: Optional[str]) -> str:
     return "chat.planner"
 
 
+# Internal utility/decision roles keep their OWN assigned slot even when a model
+# is force-picked in the chat UI: that pick drives the conversation's answer, not
+# the cheap background bookkeeping (memory retrieval / cognition) the operator set
+# deliberately. Without this, picking e.g. an opus conversation model silently
+# dragged memory_decision/cognition onto it too, ignoring their (e.g. OpenAI) slot.
+_FORCE_EXEMPT_ROLE_PREFIXES = ("memory_decision:", "cognition:")
+
+
+def role_ignores_forced_pick(role: Optional[str]) -> bool:
+    return (role or "").startswith(_FORCE_EXEMPT_ROLE_PREFIXES)
+
+
 def _build_chat_provider(p: Provider, api_key: Optional[str], default_model: str, openai_service: Any,
                          *, enable_prompt_caching: bool = False) -> Optional[ChatProvider]:
     t = (p.provider_type or "").strip()
@@ -231,10 +243,11 @@ def build_llm_router(openai_service: Any, db: Session) -> LLMRouter:
 
     def resolve_chat(model: Optional[str], role: Optional[str]):
         # 0) A model explicitly picked in the chat UI (forced) is authoritative for
-        #    this request — it overrides the workbench routing slot.
+        #    this request — it overrides the workbench routing slot. Utility/
+        #    decision roles are exempt: they always use their own assigned slot.
         from services.providers.chat_session import forced_chat_model
         forced = forced_chat_model.get()
-        if forced:
+        if forced and not role_ignores_forced_pick(role):
             p = chat_models.get(forced)
             if p is not None and (p.provider_type or "") != "openai":
                 prov = _chat_provider_for(p, forced)
@@ -284,7 +297,7 @@ def build_llm_router(openai_service: Any, db: Session) -> LLMRouter:
     def resolve_chat_model(model: Optional[str], role: Optional[str]) -> Optional[str]:
         from services.providers.chat_session import forced_chat_model
         forced = forced_chat_model.get()
-        if forced:
+        if forced and not role_ignores_forced_pick(role):
             return forced
         if role:
             mid = _slot_model_id(role_to_slot(role))
