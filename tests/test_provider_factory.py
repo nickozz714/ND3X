@@ -182,6 +182,34 @@ def test_forced_pick_does_not_hijack_utility_slots(db):
         forced_chat_model.reset(tok)
 
 
+def test_openai_assigned_slot_is_authoritative_not_hijacked(db):
+    # An OpenAI-assigned role slot must resolve to the OpenAI base path (None) —
+    # NOT fall through to a non-OpenAI slot like chat.cognition. This was the bug:
+    # a gpt planner slot sent the answer to claude/sonnet because _slot_provider
+    # returns None for BOTH "openai-assigned" and "unassigned", and the fallthrough
+    # borrowed the first non-openai slot.
+    from services.providers.ollama_provider import OllamaChatProvider
+    reg = ProviderRegistryService(db)
+    lp = reg.create_provider(ProviderCreate(name="Ollama", provider_type="ollama",
+                                            base_url="http://localhost:11434/v1", is_local=True))
+    lm = reg.create_model(ProviderModelCreate(provider_id=lp.id, model_id="qwen2.5:14b", capability="chat"))
+    reg.set_assignment("chat.cognition", lm.id)  # the tempting non-openai fallback
+    oa = reg.create_provider(ProviderCreate(name="OpenAI", provider_type="openai", api_key="k"))
+    om = reg.create_model(ProviderModelCreate(provider_id=oa.id, model_id="gpt-4o-mini", capability="chat"))
+    reg.set_assignment("chat.planner", om.id)
+    reg.set_assignment("chat.memory_decision", om.id)
+
+    router = build_llm_router(_FakeOpenAI(), db)
+    # Answer role (planner slot = OpenAI): base path, NOT hijacked to qwen.
+    assert router._resolve_chat("gpt-4o-mini", "assistant:Foo") is None
+    assert router._resolve_chat_model("gpt-4o-mini", "assistant:Foo") == "gpt-4o-mini"
+    # memory_decision on OpenAI: base path, not cognition's qwen slot.
+    assert router._resolve_chat(None, "memory_decision:retrieval") is None
+    # sanity: the cognition role itself still uses its own (qwen) slot.
+    cog = router._resolve_chat(None, "cognition:X")
+    assert cog is not None and isinstance(cog[0], OllamaChatProvider)
+
+
 def test_forced_model_from_input_payload_honored_for_non_openai(db):
     """The audit `input_payload.forced_model` path flows into `forced_chat_model`
     and is honored for a non-OpenAI (here: openai_compatible/Ollama) provider —
