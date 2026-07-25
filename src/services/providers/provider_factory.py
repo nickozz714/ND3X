@@ -205,6 +205,23 @@ def build_llm_router(openai_service: Any, db: Session) -> LLMRouter:
         return prov
 
     slot_cache: Dict[str, Optional[tuple]] = {}
+    assigned_cache: Dict[str, bool] = {}
+
+    def _slot_is_assigned(slot: str) -> bool:
+        """Whether this slot has ANY model assigned (OpenAI or otherwise). Needed
+        because `_slot_provider` returns None for both an OpenAI-assigned slot and
+        an unassigned one — resolve_chat must tell them apart so an OpenAI-assigned
+        slot goes to the OpenAI base path instead of falling through to another
+        (e.g. claude) slot."""
+        if slot in assigned_cache:
+            return assigned_cache[slot]
+        ok = False
+        try:
+            ok = reg.resolve_slot(slot) is not None
+        except Exception as exc:  # noqa: BLE001 — never break the orchestrator
+            log.warningx("Chat slot assignment-check mislukt", slot=slot, error=str(exc))
+        assigned_cache[slot] = ok
+        return ok
 
     def _slot_provider(slot: str) -> Optional[tuple]:
         """(provider, model) for a routing slot, or None for OpenAI/unassigned."""
@@ -233,11 +250,17 @@ def build_llm_router(openai_service: Any, db: Session) -> LLMRouter:
         if "v" in default_holder:
             return default_holder["v"]
         result = None
-        for slot in ("chat.planner", "chat.cognition"):
-            r = _slot_provider(slot)
-            if r is not None:
-                result = r
-                break
+        # chat.planner is primary and authoritative when assigned — its provider,
+        # or the OpenAI base path (None) when it points at an OpenAI model. Only
+        # when planner is unassigned do we borrow the next assigned non-OpenAI slot.
+        if _slot_is_assigned("chat.planner"):
+            result = _slot_provider("chat.planner")
+        else:
+            for slot in ("chat.cognition",):
+                r = _slot_provider(slot)
+                if r is not None:
+                    result = r
+                    break
         default_holder["v"] = result
         return result
 
@@ -254,11 +277,14 @@ def build_llm_router(openai_service: Any, db: Session) -> LLMRouter:
                 if prov is not None:
                     return (prov, forced)
             return None  # forced registered-OpenAI/unknown model -> OpenAI base
-        # 1) The Routing selection (capability slot for this role) takes precedence.
-        if role:
-            slotted = _slot_provider(role_to_slot(role))
-            if slotted is not None:
-                return slotted
+        # 1) The role's routing slot is authoritative when ASSIGNED: its provider,
+        #    or the OpenAI base path (None) when the slot points at an OpenAI model.
+        #    An UNASSIGNED role falls through (explicit model / borrowed slot).
+        #    Without the assigned-check an OpenAI-assigned slot returned the same
+        #    None as "unassigned" and got dragged onto _any_chat_slot's non-OpenAI
+        #    fallback (e.g. chat.cognition=claude) instead of running on OpenAI.
+        if role and _slot_is_assigned(role_to_slot(role)):
+            return _slot_provider(role_to_slot(role))
         # 2) An explicitly-requested *registered* model (e.g. an assistant pinned
         #    to "claude-opus-4-8", or a registered OpenAI model -> OpenAI base).
         if model and model in chat_models:
