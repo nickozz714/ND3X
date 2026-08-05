@@ -86,6 +86,101 @@ class SkillService:
             )
         return skill
 
+    @staticmethod
+    def _slugify_skill_name(title: str, fallback: str = "skill") -> str:
+        import re as _re
+        return _re.sub(r"[^a-z0-9]+", "_", (title or "").lower()).strip("_") or fallback
+
+    def write_skill_from_content(
+        self,
+        *,
+        title: str,
+        instructions: str,
+        description: str = "",
+        files: list[dict] | None = None,
+        source: str = "authored",
+        source_ref: str | None = None,
+        enable: bool = True,
+        name: str | None = None,
+    ):
+        """Create (or update in place) an ND3X skill from raw content — the generic,
+        source-agnostic skill-writer (LLM authoring, or content fetched from any
+        external system).
+
+        ``instructions`` is the skill body (the SKILL.md). ``files`` is a list of
+        extra ``{relative_path|path, content}`` files. The skill name is derived from
+        the title unless given. Re-writing a skill with the same name is allowed only
+        when its ``source`` matches (so an authored skill can be refreshed but a
+        local/system skill is never clobbered)."""
+        title = (title or "").strip()
+        instructions = (instructions or "").strip()
+        if not title:
+            raise HTTPException(status_code=400, detail="A skill needs a title")
+        if not instructions:
+            raise HTTPException(status_code=400, detail="A skill needs instructions (its SKILL.md body)")
+
+        skill_name = (name or self._slugify_skill_name(title, f"{source}_skill")).strip()
+
+        extra: list[dict] = []
+        for f in files or []:
+            path = (f.get("relative_path") or f.get("path") or "").strip().lstrip("/")
+            content = f.get("content") or ""
+            if not path or path.lower() == "skill.md" or path.lower().endswith("/skill.md"):
+                # SKILL.md is represented by `instructions`, not as a stored file.
+                continue
+            validate_skill_relative_path(path)
+            extra.append({"relative_path": path, "content": content})
+
+        existing = self.skill_repo.get_by_name(skill_name)
+        if existing:
+            if getattr(existing, "source", None) != source:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"A skill named '{skill_name}' already exists (source "
+                           f"'{getattr(existing, 'source', None)}') and can't be overwritten",
+                )
+            skill = self.skill_repo.update(
+                existing.id,
+                SkillUpdate(
+                    display_name=title,
+                    description=description or "",
+                    instructions=instructions,
+                    source=source,
+                    source_name=source_ref,
+                    is_enabled=bool(enable),
+                ),
+            )
+            created = False
+        else:
+            skill = self.skill_repo.create(
+                SkillCreate(
+                    name=skill_name,
+                    display_name=title,
+                    description=description or "",
+                    instructions=instructions,
+                    is_enabled=bool(enable),
+                    source=source,
+                    source_name=source_ref,
+                    version="1.0.0",
+                )
+            )
+            created = True
+
+        written: list[str] = []
+        for e in extra:
+            self.skill_file_service.create_or_update_skill_file(
+                skill.id, e["relative_path"], e["content"], {}
+            )
+            written.append(e["relative_path"])
+
+        return {
+            "created": created,
+            "skill_id": skill.id,
+            "name": skill_name,
+            "display_name": skill.display_name,
+            "files": written,
+        }
+
     def update(self, skill_id: int, data: SkillUpdate, user=None):
         existing_skill = self.get_by_id(skill_id)
         if _is_protected_skill_obj(existing_skill) or bool(getattr(data, "is_system", False) or getattr(data, "is_runtime", False)):

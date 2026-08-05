@@ -12,6 +12,11 @@ class AskRequest(BaseModel):
     model: Optional[str] = None
 
 
+class AskMessageRequest(BaseModel):
+    """A mid-turn message added to an in-flight ask run."""
+    text: str
+
+
 class AskDoc(BaseModel):
     meta: str
     content: str

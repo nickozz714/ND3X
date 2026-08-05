@@ -13,6 +13,7 @@ from component.config import settings
 from component.logging import get_logger
 from models.response_models import (
     AskRequest,
+    AskMessageRequest,
     AskResponse,
     TranscriptResponse,
     VoiceResponse,
@@ -429,6 +430,15 @@ async def ask_result(thread_id: str, run_id: str) -> Dict[str, Any]:
 async def ask_cancel(thread_id: str, run_id: str) -> Dict[str, Any]:
     """Cancel an in-flight ask run (interrupts orchestration + provider call)."""
     return ask_job_service.cancel_job(thread_id=thread_id, run_id=run_id)
+
+
+@router.post("/ask/{thread_id}/{run_id}/message")
+async def ask_message(thread_id: str, run_id: str, req: AskMessageRequest) -> Dict[str, Any]:
+    """Add a mid-turn message to an in-flight ask run. The orchestration folds it
+    into the current turn at its next safe checkpoint; anything it can't consume is
+    carried over to the next turn. Returns queued=False if the run is no longer
+    active, so the caller can start a normal turn instead."""
+    return ask_job_service.enqueue_message(thread_id=thread_id, run_id=run_id, text=req.text)
 
 
 # ----------------------------

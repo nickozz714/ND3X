@@ -596,6 +596,22 @@ class RouterWorkflow:
             step_payload["_workflow_goal"] = step.get("goal")
             step_payload["_selected_skill_names"] = selected_skill_names
 
+            # Surface which skill(s) the router assigned to this step so the UI shows
+            # "Using skill: X" (same event type the single-agent path already emits).
+            if selected_skill_names:
+                self.trace_fn(
+                    trace,
+                    thread_id=session_id,
+                    turn_id=turn_id,
+                    type="agent_skill_selection",
+                    summary=f"Using skill: {', '.join(selected_skill_names)}",
+                    data={
+                        "assistant": getattr(assistant, "name", assistant_name),
+                        "selected_skill_names": selected_skill_names,
+                    },
+                    progress_cb=progress_cb,
+                )
+
             if requires_previous_output:
                 available_step_results = _dedupe_step_results(previous_step_results + executed_steps)
 
