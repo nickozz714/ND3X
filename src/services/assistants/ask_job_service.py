@@ -198,6 +198,83 @@ class AskJobService:
     def request_path(self, thread_id: str, run_id: str) -> Path:
         return self.run_dir(thread_id, run_id) / "request.json"
 
+    def queue_path(self, thread_id: str, run_id: str) -> Path:
+        return self.run_dir(thread_id, run_id) / "queued_messages.json"
+
+    # ---------------------------------------------------------------------
+    # Mid-turn message queue
+    #
+    # While a run is in progress the user can send more messages. They are
+    # appended to a per-run queue file and either FOLDED into the running turn
+    # (drained at safe checkpoints inside the orchestration — "an addition to
+    # the current request") or, if the turn can't consume them (e.g. the
+    # single-shot Claude path), CARRIED OVER to the next turn.
+    # ---------------------------------------------------------------------
+
+    def _read_queue(self, thread_id: str, run_id: str) -> list:
+        p = self.queue_path(thread_id, run_id)
+        if not p.exists():
+            return []
+        try:
+            obj = json.loads(p.read_text(encoding="utf-8"))
+            return obj if isinstance(obj, list) else []
+        except Exception:
+            return []
+
+    def _write_queue(self, thread_id: str, run_id: str, items: list) -> None:
+        p = self.queue_path(thread_id, run_id)
+        self.ensure_dir(p.parent)
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        tmp.replace(p)
+
+    def enqueue_message(self, *, thread_id: str, run_id: str, text: str) -> Dict[str, Any]:
+        """Append a mid-turn message to the run's queue. Refused (queued=False)
+        when the run is no longer active, so the caller can start a normal turn."""
+        text = (text or "").strip()
+        if not text:
+            return {"queued": False, "reason": "empty"}
+        state = self.get_status(thread_id=thread_id, run_id=run_id).get("state")
+        if state not in ACTIVE_ASK_STATES:
+            return {"queued": False, "reason": "not_active", "state": state}
+        items = self._read_queue(thread_id, run_id)
+        entry = {"id": str(uuid.uuid4()), "text": text, "ts": self.utc_now(), "state": "queued"}
+        items.append(entry)
+        self._write_queue(thread_id, run_id, items)
+        pending = sum(1 for i in items if i.get("state") == "queued")
+        return {"queued": True, "id": entry["id"], "pending": pending,
+                "thread_id": thread_id, "run_id": run_id}
+
+    def queued_texts(self, thread_id: str, run_id: str) -> list:
+        return [i["text"] for i in self._read_queue(thread_id, run_id)
+                if i.get("state") == "queued" and i.get("text")]
+
+    def drain_queued_messages(self, *, thread_id: str, run_id: str) -> list:
+        """Return the texts of all still-queued messages and mark them consumed.
+        Called at safe checkpoints inside the running orchestration."""
+        items = self._read_queue(thread_id, run_id)
+        fresh = [i for i in items if i.get("state") == "queued" and i.get("text")]
+        if not fresh:
+            return []
+        for i in items:
+            if i.get("state") == "queued":
+                i["state"] = "consumed"
+        self._write_queue(thread_id, run_id, items)
+        return [i["text"] for i in fresh]
+
+    def carry_over_queued(self, *, thread_id: str, run_id: str) -> list:
+        """At run end: take any still-queued messages (never folded into the turn)
+        and mark them carried, returning their texts for the next turn."""
+        items = self._read_queue(thread_id, run_id)
+        left = [i for i in items if i.get("state") == "queued" and i.get("text")]
+        if not left:
+            return []
+        for i in items:
+            if i.get("state") == "queued":
+                i["state"] = "carried"
+        self._write_queue(thread_id, run_id, items)
+        return [i["text"] for i in left]
+
     # ---------------------------------------------------------------------
     # Status/result persistence
     # ---------------------------------------------------------------------
@@ -262,6 +339,9 @@ class AskJobService:
             q = queue_info(run_id)
             if q.get("queued"):
                 status["queue"] = q
+            pending = self.queued_texts(thread_id, run_id)
+            if pending:
+                status["queued_messages"] = pending
         return status
 
     def get_result(self, *, thread_id: str, run_id: str) -> Dict[str, Any]:
@@ -352,6 +432,27 @@ class AskJobService:
                 "kind": "narration",
                 "message": event.get("say") or summary,
                 "assistant": event.get("assistant"),
+                **base,
+            }
+
+        if event_type == "midturn_message":
+            return {
+                "state": "running",
+                "phase": "midturn",
+                "message": summary or "User added a message",
+                "assistant": event.get("assistant"),
+                **base,
+            }
+
+        if event_type == "agent_skill_selection":
+            names = event.get("selected_skill_names") or []
+            pretty = ", ".join(names) if names else ""
+            return {
+                "state": "running",
+                "phase": "skill",
+                "message": summary or (f"Using skill: {pretty}" if pretty else "Selecting skill"),
+                "assistant": event.get("assistant"),
+                "skills": names,
                 **base,
             }
 
@@ -598,6 +699,13 @@ class AskJobService:
                     run_task.cancel()
                     return
 
+        # Mid-turn queue: let the orchestration drain user messages that arrive
+        # while this run is in flight, at its own safe checkpoints. Mirrors the
+        # _cancellation_check hook (stripped before any payload serialization).
+        payload["_drain_messages"] = lambda: self.drain_queued_messages(
+            thread_id=thread_id, run_id=run_id
+        )
+
         try:
             run_task = asyncio.ensure_future(
                 run_ask_cb(
@@ -638,6 +746,13 @@ class AskJobService:
             except Exception as store_exc:
                 print(f"Failed to store assistant output message: {store_exc!r}")
 
+            # Any mid-turn messages that were never folded into this turn (e.g. the
+            # single-shot Claude path) are carried over so the client re-submits
+            # them as the next turn — nothing the user typed gets dropped.
+            carried = self.carry_over_queued(thread_id=thread_id, run_id=run_id)
+            if carried and isinstance(out, dict):
+                out["carried_over_messages"] = carried
+
             self.write_result(
                 thread_id=thread_id,
                 run_id=run_id,
@@ -653,6 +768,7 @@ class AskJobService:
                     "phase": "completed",
                     "message": "Request completed",
                     "mode": out.get("mode"),
+                    **({"carried_over_messages": carried} if carried else {}),
                 },
             )
 

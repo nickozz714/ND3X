@@ -191,9 +191,18 @@ def _build_transcript_messages(
             return {"role": "user", "content": [{"type": "input_text", "text": text}, *image_blocks]}
         return {"role": "user", "content": text}
 
+    def _midturn_turns() -> List[Dict[str, Any]]:
+        # Messages the user sent mid-turn, folded in as trailing user turns.
+        return [
+            {"role": "user",
+             "content": "(The user sent this while you were working — treat it as an "
+                        "addition to the current request)\n" + str(t)}
+            for t in (payload.get("_midturn_additions") or []) if str(t).strip()
+        ]
+
     # First hop (nothing accumulated yet): the plan_prompt already IS the full anchor.
     if not (acc_calls or acc_results or acc_docs):
-        return [_anchor_turn(plan_prompt)]
+        return [_anchor_turn(plan_prompt), *_midturn_turns()]
 
     anchor_payload = dict(payload)
     anchor_payload["_history_anchor"] = True
@@ -210,6 +219,7 @@ def _build_transcript_messages(
             messages.append({"role": "user", "content": "Tool result:\n" + _json(acc_results[i])})
     if acc_docs:
         messages.append({"role": "user", "content": "Documents retrieved:\n" + _json(acc_docs)})
+    messages.extend(_midturn_turns())
     messages.append({
         "role": "user",
         "content": "Continue. Decide the next action as a single JSON object matching the schema.",
@@ -496,8 +506,11 @@ def _agent_loop_state(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+_INTERNAL_CALLABLE_KEYS = {"_cancellation_check", "_drain_messages"}
+
+
 def _payload_without_callbacks(payload: Dict[str, Any]) -> Dict[str, Any]:
-    return {k: v for k, v in (payload or {}).items() if k != "_cancellation_check"}
+    return {k: v for k, v in (payload or {}).items() if k not in _INTERNAL_CALLABLE_KEYS}
 
 
 class AssistantPipelineRunner:
@@ -790,6 +803,28 @@ class AssistantPipelineRunner:
 
         payload["_agent_loop_iterations"] = int(payload.get("_agent_loop_iterations") or 0) + 1
         loop_iteration = int(payload["_agent_loop_iterations"])
+
+        # Mid-turn queue: fold any messages the user sent while this turn is running
+        # into the working context, so the model treats them as additions to the
+        # current request. Drained once per hop; each message is surfaced once.
+        _drain = payload.get("_drain_messages")
+        if callable(_drain):
+            try:
+                _new_msgs = _drain() or []
+            except Exception:  # noqa: BLE001 — the queue must never break the turn
+                _new_msgs = []
+            if _new_msgs:
+                payload["_midturn_additions"] = list(payload.get("_midturn_additions") or []) + _new_msgs
+                for _m in _new_msgs:
+                    self.trace_fn(
+                        trace,
+                        thread_id=session_id,
+                        turn_id=turn_id,
+                        type="midturn_message",
+                        summary=f"User added: {str(_m)[:80]}",
+                        data={"assistant": assistant_name, "text": _m},
+                        progress_cb=progress_cb,
+                    )
         elapsed_s = time.time() - float(payload.get("_agent_loop_started_at") or time.time())
         # max_wall_clock_seconds <= 0 means "no time limit" (iteration cap still applies).
         wall_limit = loop_budgets["max_wall_clock_seconds"]
@@ -1084,6 +1119,12 @@ class AssistantPipelineRunner:
             if not (_agent_msgs and _agent_msgs[-1]["role"] == "user"
                     and _agent_msgs[-1]["content"].strip() == (question or "").strip()):
                 _agent_msgs.append({"role": "user", "content": question or ""})
+            # Fold in any mid-turn messages the user sent while this turn was starting
+            # (drained at the top of this hop). Messages that arrive later, during the
+            # single-shot CLI stream, are carried over to the next turn instead.
+            for _add in (payload.get("_midturn_additions") or []):
+                if str(_add).strip():
+                    _agent_msgs.append({"role": "user", "content": str(_add)})
             # Memory injection. The orchestrator already selected the relevant
             # memories into payload["_planner_memory_context"] (and marked them
             # injected). The normal planner loop consumes them, but this option-A
@@ -1153,7 +1194,10 @@ class AssistantPipelineRunner:
                                     _narration.append({"kind": "say", "text": _say, "ts": time.time()})
                             elif _kind == "tool":
                                 _emitted = True
-                                _tool = _ev.get("name") or "tool"
+                                _raw_tool = _ev.get("name") or "tool"
+                                # Gateway tools reach the CLI as mcp__nd3x__<name>; show
+                                # the bare tool name so steps read cleanly.
+                                _tool = _raw_tool.split("__")[-1] if "__" in _raw_tool else _raw_tool
                                 self.trace_fn(
                                     trace, thread_id=session_id, turn_id=turn_id,
                                     type="tool_call", summary=f"Calling {_tool}",
@@ -1161,6 +1205,20 @@ class AssistantPipelineRunner:
                                     progress_cb=progress_cb,
                                 )
                                 _narration.append({"kind": "tool", "text": f"Using {_tool}", "ts": time.time()})
+
+                    # Surface the active skill(s) for this Claude turn once, up front.
+                    # On the CLI path a skill isn't a discrete tool call (its guidance +
+                    # mcp__nd3x tools are injected), so the honest "skill in use" signal
+                    # is which skills are active — same event type as the normal loop.
+                    if selected_skill_names:
+                        self.trace_fn(
+                            trace, thread_id=session_id, turn_id=turn_id,
+                            type="agent_skill_selection",
+                            summary=f"Using skill: {', '.join(selected_skill_names)}",
+                            data={"assistant": assistant_name,
+                                  "selected_skill_names": list(selected_skill_names)},
+                            progress_cb=progress_cb,
+                        )
 
                     try:
                         await _consume(_agent_input, _cli_sid)
@@ -2186,7 +2244,7 @@ class AssistantPipelineRunner:
                     "assistant_id": getattr(getattr(assistant, "config", None), "id", None),
                     "assistant_name": getattr(getattr(assistant, "config", None), "name", None) or assistant_name,
                     "question": question,
-                    "payload": {k: v for k, v in (payload or {}).items() if k != "_cancellation_check"},
+                    "payload": _payload_without_callbacks(payload),
                     "model": model,
                 }
 

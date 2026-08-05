@@ -107,6 +107,7 @@ import services.builtin.tools.workflow_tools  # noqa: F401, E402
 import services.builtin.tools.secret_tools  # noqa: F401, E402
 import services.builtin.tools.board_tools  # noqa: F401, E402
 import services.builtin.tools.repo_tools  # noqa: F401, E402
+import services.builtin.tools.skill_author_tools  # noqa: F401, E402
 
 async def boot_stdio_servers() -> None:
     """
@@ -707,6 +708,16 @@ def steps_from_trace(trace: Optional[list]) -> list:
             txt = (ev.get("say") or ev.get("summary") or "").strip()
             if txt:
                 steps.append({"kind": "say", "text": txt})
+        elif t == "midturn_message":
+            txt = (ev.get("summary") or "").strip()
+            if txt:
+                steps.append({"kind": "say", "text": txt})
+        elif t == "agent_skill_selection":
+            names = ev.get("selected_skill_names") or []
+            if names:
+                pretty = ", ".join(str(n) for n in names)
+                txt = (ev.get("summary") or f"Using skill: {pretty}").strip()
+                steps.append({"kind": "skill", "text": txt, "skills": list(names)})
         elif t == "tool_call":
             steps.append({"kind": "tool", "text": (ev.get("summary") or f"Using {ev.get('tool') or 'a tool'}").strip()})
         elif t == "tool_result":
