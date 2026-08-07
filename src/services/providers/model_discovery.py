@@ -36,9 +36,14 @@ def guess_capability(model_id: str) -> str:
     return "chat"
 
 
-def _shape(ids: List[str], provider_type: str = "") -> List[Dict[str, Any]]:
+def _shape(
+    ids: List[str], provider_type: str = "",
+    live: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     """Shape discovered ids into rich rows, enriched from the online model catalog
-    (display name, context window, price, what it's good for) when available."""
+    (display name, context window, price, what it's good for) when available.
+    `live` carries per-id metadata reported by the provider's OWN listing (e.g.
+    OpenRouter's pricing/context_length) — that wins over the static catalog."""
     from services.providers.model_catalog import enrich
 
     seen = set()
@@ -49,18 +54,54 @@ def _shape(ids: List[str], provider_type: str = "") -> List[Dict[str, Any]]:
             continue
         seen.add(mid)
         meta = enrich(provider_type, mid)
+        lv = (live or {}).get(mid) or {}
+        price_in = lv.get("price_in") if lv.get("price_in") is not None else meta.get("price_in")
+        price_out = lv.get("price_out") if lv.get("price_out") is not None else meta.get("price_out")
         out.append({
             "model_id": mid,
             # Catalog capability is more reliable than the id keyword guess.
             "capability": meta.get("capability") or guess_capability(mid),
-            "display_name": meta.get("display_name"),
-            "context_window": meta.get("context_window"),
-            "price_in": meta.get("price_in"),
-            "price_out": meta.get("price_out"),
+            "display_name": lv.get("display_name") or meta.get("display_name"),
+            "context_window": lv.get("context_window") or meta.get("context_window"),
+            "price_in": price_in,
+            "price_out": price_out,
+            # Free = the provider explicitly reported a 0/0 price (absence ≠ free).
+            "free": bool(lv.get("has_pricing")) and not price_in and not price_out,
             "good_for": meta.get("good_for"),
             "in_catalog": bool(meta),
         })
     out.sort(key=lambda x: (x["capability"], x["model_id"]))
+    return out
+
+
+def _live_meta(items: List[Any]) -> Dict[str, Dict[str, Any]]:
+    """Per-model metadata from an OpenAI-compatible /models listing. OpenRouter
+    (and some other gateways) include `pricing` (USD per TOKEN, as strings),
+    `context_length` and a human `name` — convert to ND3X units ($ per 1M)."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for m in items or []:
+        if not isinstance(m, dict) or not m.get("id"):
+            continue
+        entry: Dict[str, Any] = {}
+        pricing = m.get("pricing")
+        if isinstance(pricing, dict):
+            try:
+                if pricing.get("prompt") is not None:
+                    entry["price_in"] = round(float(pricing["prompt"]) * 1_000_000, 4)
+                if pricing.get("completion") is not None:
+                    entry["price_out"] = round(float(pricing["completion"]) * 1_000_000, 4)
+                entry["has_pricing"] = "prompt" in pricing or "completion" in pricing
+            except (TypeError, ValueError):
+                pass
+        if m.get("context_length"):
+            try:
+                entry["context_window"] = int(m["context_length"])
+            except (TypeError, ValueError):
+                pass
+        if m.get("name"):
+            entry["display_name"] = str(m["name"])
+        if entry:
+            out[str(m["id"])] = entry
     return out
 
 
@@ -131,7 +172,10 @@ def discover_models(
         data = r.json()
         items = data.get("data") if isinstance(data, dict) else data
         ids = [m.get("id") if isinstance(m, dict) else m for m in (items or [])]
-        return {"models": _shape([i for i in ids if i], t)}
+        # Gateways like OpenRouter report pricing/context per model — carry it along
+        # so the picker can show costs and filter on free models.
+        live = _live_meta(items if isinstance(items, list) else [])
+        return {"models": _shape([i for i in ids if i], t, live=live)}
     except Exception as exc:  # noqa: BLE001 — discovery is best-effort
         log.warningx("Model discovery mislukt", provider_type=t, error=str(exc))
         return {"models": [], "error": f"Could not list models: {exc}"}
