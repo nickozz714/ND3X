@@ -62,6 +62,12 @@ def usage_summary(period: str = "month", db: Session = Depends(get_db)):
     return UsageService(db).summary(since_ts=since)
 
 
+@router.get("/stats")
+def platform_stats(days: int = 30, db: Session = Depends(get_db)):
+    """Daily platform statistics (tokens/cost, messages, workflow reliability)."""
+    return UsageService(db).platform_stats(days=days)
+
+
 @router.get("/budget")
 def get_budget(db: Session = Depends(get_db)):
     return UsageService(db).budget_status()

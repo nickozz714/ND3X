@@ -82,6 +82,16 @@ PRESETS = [
         "needs_base_url": False, "is_local": False, "capabilities": ["chat", "embeddings"],
     },
     {
+        "key": "openrouter", "provider_type": "openai_compatible", "label": "OpenRouter",
+        "description": "One API key for hundreds of models (OpenAI, Anthropic, Google, "
+                       "Llama, Mistral, DeepSeek, …) routed through OpenRouter — pay-per-token, "
+                       "automatic fallbacks. Model id = the provider/model slug, e.g. "
+                       "anthropic/claude-3.5-sonnet or meta-llama/llama-3.1-70b-instruct.",
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key_url": "https://openrouter.ai/keys",
+        "needs_base_url": False, "is_local": False, "capabilities": ["chat"],
+    },
+    {
         "key": "openai_compatible", "provider_type": "openai_compatible", "label": "Other OpenAI-compatible",
         "description": "Any OpenAI-compatible endpoint — set the base URL yourself.",
         "base_url": "", "api_key_url": "",

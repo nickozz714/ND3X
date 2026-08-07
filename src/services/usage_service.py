@@ -427,3 +427,123 @@ class UsageService:
             "cost_ratio": round(cost_ratio, 4) if cost_ratio is not None else None,
             "over_cost_budget": bool(cost_ratio is not None and cost_ratio >= 1.0),
         }
+
+    # ── platform statistics (dashboard) ──────────────────────────────────────
+    def platform_stats(self, days: int = 30) -> Dict[str, Any]:
+        """Daily platform statistics aggregated from the EXISTING ledgers — token
+        usage per day (stacked by provider, with estimated cost), messages per day,
+        and workflow-run reliability. No new tracking; everything is derived from
+        indexed columns (TokenUsage.ts, thread-message created_at, workflow_run)."""
+        from datetime import timedelta
+
+        from models.assistant_thread import AssistantThreadMessageModel
+        from models.workflow import WorkflowRun
+
+        days = max(1, min(int(days or 30), 365))
+        now = datetime.now(timezone.utc)
+        since_dt = now - timedelta(days=days)
+        since_ts = since_dt.timestamp()
+        since_iso = since_dt.strftime("%Y-%m-%d")
+        price = self._price_map()
+
+        # Tokens & estimated cost per day (grouped per model so pricing applies,
+        # folded to per-day rows with a per-provider split for the stacked chart).
+        day = func.date(TokenUsage.ts, "unixepoch")
+        daily: Dict[str, Dict[str, Any]] = {}
+        for d, ptype, model, i, o in (
+            self.db.query(
+                day.label("d"), TokenUsage.provider_type, TokenUsage.model,
+                func.coalesce(func.sum(TokenUsage.input_tokens), 0),
+                func.coalesce(func.sum(TokenUsage.output_tokens), 0),
+            )
+            .filter(TokenUsage.ts >= since_ts)
+            .group_by("d", TokenUsage.provider_type, TokenUsage.model)
+            .order_by("d")
+            .all()
+        ):
+            row = daily.setdefault(str(d), {
+                "date": str(d), "input_tokens": 0, "output_tokens": 0,
+                "tokens": 0, "est_cost_usd": 0.0, "by_provider": {},
+            })
+            i, o = int(i or 0), int(o or 0)
+            row["input_tokens"] += i
+            row["output_tokens"] += o
+            row["tokens"] += i + o
+            p = ptype or "unknown"
+            row["by_provider"][p] = row["by_provider"].get(p, 0) + i + o
+            c = self._cost_of(i, o, price.get(model))
+            if c:
+                row["est_cost_usd"] = round(row["est_cost_usd"] + c, 6)
+
+        # Messages per day (user vs assistant) + active threads in the window.
+        mday = func.substr(AssistantThreadMessageModel.created_at, 1, 10)
+        messages: Dict[str, Dict[str, Any]] = {}
+        for d, role, n in (
+            self.db.query(mday.label("d"), AssistantThreadMessageModel.role, func.count())
+            .filter(AssistantThreadMessageModel.created_at >= since_iso)
+            .group_by("d", AssistantThreadMessageModel.role)
+            .order_by("d")
+            .all()
+        ):
+            row = messages.setdefault(str(d), {"date": str(d), "user": 0, "assistant": 0})
+            key = "user" if str(role) == "user" else "assistant"
+            row[key] += int(n or 0)
+        active_threads = int(
+            self.db.query(func.count(func.distinct(AssistantThreadMessageModel.thread_id)))
+            .filter(AssistantThreadMessageModel.created_at >= since_iso)
+            .scalar() or 0
+        )
+
+        # Workflow runs per day + reliability.
+        ok_states = ("success",)
+        bad_states = ("failed", "error", "cancelled")
+        wday = func.date(WorkflowRun.created_at)
+        runs: Dict[str, Dict[str, Any]] = {}
+        total_ok = total_bad = total_runs = 0
+        for d, status, n in (
+            self.db.query(wday.label("d"), WorkflowRun.status, func.count())
+            .filter(WorkflowRun.created_at >= since_dt.replace(tzinfo=None))
+            .group_by("d", WorkflowRun.status)
+            .order_by("d")
+            .all()
+        ):
+            row = runs.setdefault(str(d), {"date": str(d), "success": 0, "failed": 0, "other": 0})
+            n = int(n or 0)
+            total_runs += n
+            if status in ok_states:
+                row["success"] += n
+                total_ok += n
+            elif status in bad_states:
+                row["failed"] += n
+                total_bad += n
+            else:
+                row["other"] += n
+        finished = total_ok + total_bad
+        avg_duration_s = self.db.query(
+            func.avg((func.julianday(WorkflowRun.finished_at) - func.julianday(WorkflowRun.started_at)) * 86400.0)
+        ).filter(
+            WorkflowRun.created_at >= since_dt.replace(tzinfo=None),
+            WorkflowRun.finished_at.isnot(None),
+            WorkflowRun.started_at.isnot(None),
+        ).scalar()
+
+        # Headline KPIs for the window.
+        window_tokens = sum(r["tokens"] for r in daily.values())
+        window_cost = round(sum(r["est_cost_usd"] for r in daily.values()), 4)
+        window_messages = sum(r["user"] + r["assistant"] for r in messages.values())
+
+        return {
+            "days": days,
+            "kpis": {
+                "tokens": window_tokens,
+                "est_cost_usd": window_cost,
+                "messages": window_messages,
+                "active_threads": active_threads,
+                "workflow_runs": total_runs,
+                "workflow_success_rate": round(total_ok / finished, 4) if finished else None,
+                "workflow_avg_duration_s": round(float(avg_duration_s), 1) if avg_duration_s else None,
+            },
+            "daily_tokens": sorted(daily.values(), key=lambda r: r["date"]),
+            "daily_messages": sorted(messages.values(), key=lambda r: r["date"]),
+            "daily_workflow_runs": sorted(runs.values(), key=lambda r: r["date"]),
+        }
