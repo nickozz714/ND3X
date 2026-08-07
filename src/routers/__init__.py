@@ -32,11 +32,13 @@ from .image_routes import router as image_routes
 from .import_export_router import router as import_export_routes
 from .secrets import router as secrets_routes
 from .board_router import router as board_routes
+from .tenancy_router import router as tenancy_routes
 from .background_task_router import router as background_task_routes
 from .repository_router import router as repository_routes
 from .internal_mcp_router import router as internal_mcp_routes
 
 all_routers = [
+    tenancy_routes,
     authenticate_router,
     main_routes,
     ui_routes,
