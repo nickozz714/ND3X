@@ -112,3 +112,29 @@ switches everything you see.
 
 Rollout per domain: board + workflows first, then transfers/repos/docs/meetings,
 then project-owned capability creation UIs.
+
+## 7. Chat categories & project-bound cognition (design, to build carefully)
+
+Problem: `assistant_projects` was double-used — as the workspace project AND as
+the chat sidebar's thread grouping. The sidebar must not offer "projects";
+the topbar switcher owns which project you are in.
+
+- **Chat sidebar shows ONLY the active project's threads.** The project picker
+  disappears from the sidebar entirely.
+- **New entity `thread_categories`** (id, project_id FK, name, position,
+  created_by): user-defined SUB-CATEGORIES within a project to organise chats.
+  `assistant_threads.category_id` (nullable FK). Sidebar = category groups
+  (collapsible) + uncategorised; drag/move thread between categories; CRUD
+  inline (rename/delete keeps threads, clears category_id).
+- **Migration**: existing non-personal "projects" that were used as chat folders
+  and have NO workspace content of their own (no board/workflow/repo rows) are
+  CONVERTED into categories inside the owner's personal project, and their
+  threads follow. Workspace projects stay projects. Deterministic + idempotent,
+  dry-run logging first.
+- **Cognition per project**: system_memories/beliefs/curiosity queries filter on
+  the ACTIVE project (they already carry project_id); recording stamps it from
+  the run payload. System Cognition UI drops its own project picker and follows
+  the workspace.
+- Rollout: (1) schema + backfill, (2) thread routes filter by active project +
+  category CRUD, (3) sidebar rebuild, (4) cognition filter + stamping, (5)
+  migration of folder-projects → categories.
