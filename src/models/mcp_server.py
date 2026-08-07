@@ -8,6 +8,7 @@ class MCPServer(Base):
     __tablename__ = "mcp_server"
 
     id          = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
 
     # Human/admin identity
     name        = Column(String, nullable=False, unique=True)

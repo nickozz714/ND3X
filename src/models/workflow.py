@@ -20,6 +20,7 @@ class Workflow(Base):
     __tablename__ = "workflow"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     name = Column(String(255), nullable=False, unique=True, index=True)
     description = Column(Text, nullable=True)
     input_schema = Column(JSON, nullable=False, default=dict)
@@ -72,6 +73,7 @@ class WorkflowRun(Base):
     __tablename__ = "workflow_run"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     workflow_id = Column(Integer, ForeignKey("workflow.id"), nullable=False, index=True)
     trigger_type = Column(String(32), nullable=False, index=True)  # manual | cron
     status = Column(String(32), nullable=False, default="queued", index=True)

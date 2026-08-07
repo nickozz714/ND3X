@@ -24,6 +24,7 @@ class FabricDataAgent(Base):
     __tablename__ = "fabric_data_agents"
 
     id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     # Short stable slug the orchestrator passes as `agent` (e.g. "sales").
     name = Column(String(120), unique=True, nullable=False, index=True)
     display_name = Column(String(255), nullable=True)

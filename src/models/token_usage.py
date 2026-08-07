@@ -16,6 +16,7 @@ class TokenUsage(Base):
     __tablename__ = "token_usage"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     ts = Column(Float, nullable=False)  # epoch seconds
 
     thread_id = Column(String(255), nullable=False, index=True)
@@ -59,6 +60,7 @@ class UsageBudget(Base):
     __tablename__ = "usage_budget"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     monthly_token_budget = Column(Integer, nullable=True)   # tokens/month, or None = unset
     monthly_cost_budget_usd = Column(Float, nullable=True)  # USD/month, or None = unset
     updated_at = Column(Float, nullable=False, default=0.0)

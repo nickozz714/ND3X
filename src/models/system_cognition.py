@@ -10,6 +10,7 @@ class MemoryModel(Base):
     __tablename__ = "system_memories"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    org_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     type: Mapped[str] = mapped_column(String(80), nullable=False, default="note")
     content: Mapped[str] = mapped_column(Text, nullable=False)
     scope: Mapped[str] = mapped_column(String(40), nullable=False, default="global")
@@ -47,6 +48,7 @@ class BeliefModel(Base):
     __tablename__ = "system_beliefs"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    org_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     topic: Mapped[str] = mapped_column(String(255), nullable=False)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     insights: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
@@ -93,6 +95,7 @@ class CuriosityJobModel(Base):
     __tablename__ = "system_curiosity_jobs"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    org_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     topic: Mapped[str] = mapped_column(String(255), nullable=False)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 

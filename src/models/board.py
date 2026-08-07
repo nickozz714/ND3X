@@ -43,6 +43,8 @@ class BoardItem(Base):
     __tablename__ = "board_item"
 
     id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
+    project_id = Column(String(128), nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     title = Column(String(512), nullable=False)
     description = Column(Text, nullable=True)
     status = Column(String(16), nullable=False, default="todo", index=True)

@@ -11,6 +11,7 @@ class AssistantProjectModel(Base):
     __tablename__ = "assistant_projects"
 
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    org_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -47,6 +48,7 @@ class AssistantThreadModel(Base):
     __tablename__ = "assistant_threads"
 
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    org_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
 
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)

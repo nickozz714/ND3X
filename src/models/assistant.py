@@ -8,6 +8,7 @@ class Assistant(Base):
     __tablename__ = "assistant"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     name = Column(String, nullable=False, unique=True)
     description = Column(Text, nullable=False)
 

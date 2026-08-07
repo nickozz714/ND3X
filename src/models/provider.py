@@ -71,6 +71,7 @@ class Provider(Base):
     __tablename__ = "providers"
 
     id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     name = Column(String(255), unique=True, nullable=False, index=True)
     provider_type = Column(String(64), nullable=False, index=True)
     base_url = Column(String(512), nullable=True)
@@ -150,6 +151,7 @@ class CapabilityAssignment(Base):
     __tablename__ = "capability_assignments"
 
     id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     slot = Column(String(64), unique=True, nullable=False, index=True)
     provider_model_id = Column(
         Integer,

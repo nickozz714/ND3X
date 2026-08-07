@@ -18,6 +18,7 @@ class SlashCommand(Base):
     __tablename__ = "slash_commands"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     name = Column(String(64), nullable=False, unique=True, index=True)  # e.g. "review"
     description = Column(String(255), nullable=False, default="")
     template = Column(Text, nullable=False)  # may contain {args}

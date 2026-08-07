@@ -32,6 +32,7 @@ class Secret(Base):
     __tablename__ = "secrets"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     name = Column(String(255), unique=True, nullable=False, index=True)
     # Fernet-encrypted value; NULL means a placeholder (metadata only, no value).
     value_encrypted = Column(Text, nullable=True)

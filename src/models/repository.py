@@ -31,6 +31,7 @@ class Repository(Base):
     __tablename__ = "repository"
 
     id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     name = Column(String(255), unique=True, nullable=False, index=True)
     remote_url = Column(String(1024), nullable=False)
     # Absolute local path of the working copy (under settings.REPOS_DIR).

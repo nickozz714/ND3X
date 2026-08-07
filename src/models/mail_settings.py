@@ -8,6 +8,7 @@ class MailSettings(Base):
     __tablename__ = "mail_settings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    org_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
 
     name: Mapped[str] = mapped_column(String(100), nullable=False, default="Default SMTP")
 

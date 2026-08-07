@@ -13,6 +13,7 @@ class AuditTraceEvent(Base):
     __tablename__ = "audit_trace_events"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
 
     ts = Column(Float, nullable=False)  # epoch seconds
     thread_id = Column(String(255), nullable=False, index=True)

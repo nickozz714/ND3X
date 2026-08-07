@@ -11,6 +11,7 @@ class Skill(Base):
     __tablename__ = "skills"
 
     id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
 
     name = Column(String(255), unique=True, nullable=False, index=True)
     display_name = Column(String(255), nullable=True)

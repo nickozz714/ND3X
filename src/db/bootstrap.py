@@ -13,6 +13,76 @@ log = get_logger(__name__)
 # ND3X_BOOTSTRAP_* / BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_EXPERT_EMAIL path was removed.
 
 
+# Multi-tenancy phase 1 (docs/MULTI-TENANCY.md): every row in these tables gets
+# stamped with the Default Organization when its org_id is NULL. Child tables
+# (messages, skill_files, operation runs, provider_models, …) inherit the org via
+# their parent FK and are deliberately NOT stamped.
+_ORG_SCOPED_TABLES = (
+    "assistant", "assistant_projects", "assistant_threads", "skills", "tool",
+    "mcp_server", "workflow", "workflow_run", "providers", "capability_assignments",
+    "board_item", "secrets", "text_docs", "token_usage", "usage_budget",
+    "meeting_profiles", "system_memories", "system_beliefs", "system_curiosity_jobs",
+    "audit_trace_events", "notification_recipients", "mail_settings",
+    "fabric_data_agents", "repository", "slash_commands", "prompt_variable",
+    "application_settings",
+)
+
+
+async def ensure_default_organization(db: Session) -> None:
+    """Multi-tenancy phase 1: guarantee a Default Organization exists, make every
+    existing user a member of it (the first Admin becomes owner), and stamp every
+    org-scoped row that has no org yet. Idempotent — a single-org install keeps
+    behaving exactly as before; on a fresh install the setup wizard's first admin
+    becomes owner on the boot after setup."""
+    from models.authenticate import User
+    from models.tenancy import Organization, OrgMembership
+
+    org = db.query(Organization).order_by(Organization.id).first()
+    if org is None:
+        org = Organization(name="Default Organization", slug="default")
+        db.add(org)
+        db.commit()
+        db.refresh(org)
+        log.infox("Default Organization aangemaakt", org_id=org.id)
+
+    # Memberships for existing users: first Admin → owner, other Admins → admin,
+    # everyone else → member. Never touches existing memberships.
+    members = {m.user_id for m in db.query(OrgMembership).filter(OrgMembership.org_id == org.id).all()}
+    has_owner = (
+        db.query(OrgMembership)
+        .filter(OrgMembership.org_id == org.id, OrgMembership.role == "owner")
+        .count() > 0
+    )
+    added = 0
+    for u in db.query(User).order_by(User.id).all():
+        if u.id in members:
+            continue
+        roles = {str(r).lower() for r in (u.roles or [])}
+        if "admin" in roles:
+            role = "admin" if has_owner else "owner"
+            has_owner = True
+        else:
+            role = "member"
+        db.add(OrgMembership(org_id=org.id, user_id=u.id, role=role))
+        added += 1
+    if added:
+        db.commit()
+        log.infox("Org-memberships aangevuld", org_id=org.id, added=added)
+
+    # Backfill org_id on all org-scoped tables (NULL rows only).
+    stamped = 0
+    for t in _ORG_SCOPED_TABLES:
+        try:
+            res = db.execute(text(f"UPDATE {t} SET org_id = :oid WHERE org_id IS NULL"), {"oid": org.id})
+            stamped += res.rowcount or 0
+        except Exception as exc:  # noqa: BLE001 — a missing table must not sink boot
+            db.rollback()
+            log.warningx("Org-backfill overgeslagen voor tabel", table=t, error=str(exc))
+    db.commit()
+    if stamped:
+        log.infox("Org-backfill voltooid", org_id=org.id, rows=stamped)
+
+
 async def ensure_user_roles_column(db: Session) -> None:
     inspector = inspect(db.bind)
     cols = {c["name"] for c in inspector.get_columns("users")}
@@ -533,6 +603,8 @@ async def run_bootstrap(db: Session) -> None:
     # kept (idempotent) for clarity/history.
     from db.schema_reconciler import reconcile_schema
     reconcile_schema(db)
+    # Multi-tenancy phase 1: default org + memberships + org_id backfill (idempotent).
+    await ensure_default_organization(db)
     await ensure_user_roles_column(db)
     await ensure_message_important_column(db)
     await ensure_message_steps_column(db)
