@@ -684,6 +684,7 @@ async def ensure_thread_and_store_user_message(
         thread_id=thread_id,
         project_id=project_id,
         title=thread_title,
+        org_id=payload.get("_org_id"),
         metadata_={
             "source": "ask_job_callbacks",
             "model": payload.get("model"),

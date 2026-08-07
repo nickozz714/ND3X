@@ -1,0 +1,122 @@
+"""Multi-tenancy phase 2: token org claim, OrgContext resolution (no-lockout
+fallbacks), and org filtering on thread listings."""
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from db.database import Base
+from models.authenticate import User
+from models.tenancy import Organization, OrgMembership
+from services.auth_service import decode_access_token, make_access_token
+from services.tenancy_service import default_org_id, resolve_membership
+
+
+@pytest.fixture()
+def db():
+    from sqlalchemy.pool import StaticPool
+    # One shared in-memory connection: the repository opens its own sessions
+    # (SessionLocal monkeypatch) and must see the same database, also from threads.
+    eng = create_engine("sqlite://", poolclass=StaticPool,
+                        connect_args={"check_same_thread": False})
+    # Import every model so create_all sees the full schema.
+    for m in ("assistant", "assistant_thread", "skill", "tool", "mcp_server", "workflow",
+              "provider", "board", "secret", "text_document", "token_usage",
+              "meeting_profile", "system_cognition", "audit", "notification_recipient",
+              "mail_settings", "fabric_data_agent", "repository", "slash_command",
+              "prompt_variable", "application_settings", "tenancy", "authenticate",
+              "assistant_tool", "skill_tool", "assistant_skill", "skill_file",
+              "transfer", "background_task", "assistant_output_chunk", "log_entry"):
+        __import__(f"models.{m}")
+    Base.metadata.create_all(eng)
+    s = sessionmaker(bind=eng)()
+    yield s
+    s.close()
+
+
+def _user(db, email="a@b.c", roles=None):
+    u = User(email=email, password_hash="x", roles=roles or ["User"])
+    db.add(u)
+    db.commit()
+    db.refresh(u)
+    return u
+
+
+def test_token_carries_org_claim():
+    tok = make_access_token(1, "a@b.c", ["User"], org_id=7)
+    assert decode_access_token(tok)["org"] == 7
+
+
+def test_pre_tenancy_token_has_no_org_claim():
+    tok = make_access_token(1, "a@b.c", ["User"])
+    assert "org" not in decode_access_token(tok)
+
+
+def test_membership_fallback_to_default(db):
+    org = Organization(name="X", slug="x")
+    db.add(org); db.commit()
+    u = _user(db)
+    db.add(OrgMembership(org_id=org.id, user_id=u.id, role="owner")); db.commit()
+    m = resolve_membership(db, u.id)  # no org requested → default membership
+    assert m is not None and m.org_id == org.id and m.role == "owner"
+    assert default_org_id(db, u.id) == org.id
+
+
+def test_membership_self_heal_single_org(db):
+    """No-lockout: a membership-less user is healed into the only existing org."""
+    org = Organization(name="X", slug="x")
+    db.add(org); db.commit()
+    u = _user(db)
+    m = resolve_membership(db, u.id)
+    assert m is not None and m.org_id == org.id and m.role == "member"
+
+
+def test_membership_not_healed_across_org_boundary(db):
+    """With multiple orgs a membership-less user is NOT silently admitted, and a
+    claim for an org you don't belong to resolves to None (403 upstream)."""
+    a = Organization(name="A", slug="a"); b = Organization(name="B", slug="b")
+    db.add_all([a, b]); db.commit()
+    u = _user(db)
+    assert resolve_membership(db, u.id) is None
+    db.add(OrgMembership(org_id=a.id, user_id=u.id, role="member")); db.commit()
+    assert resolve_membership(db, u.id, org_id=b.id) is None
+    assert resolve_membership(db, u.id, org_id=a.id).org_id == a.id
+
+
+def test_bootstrap_backfill_then_context(db):
+    """The phase-1 backfill + phase-2 resolution end to end: existing users keep
+    working (admin becomes owner of the default org)."""
+    from db.bootstrap import ensure_default_organization
+    admin = _user(db, "admin@b.c", ["Admin"])
+    user = _user(db, "u@b.c", ["User"])
+    asyncio.run(ensure_default_organization(db))
+    assert resolve_membership(db, admin.id).role == "owner"
+    assert resolve_membership(db, user.id).role == "member"
+
+
+def test_thread_list_filters_by_org(db, monkeypatch):
+    """Threads from another org are invisible; NULL-org (legacy in-flight) rows
+    stay visible during migration."""
+    from models.assistant_thread import AssistantThreadModel
+    import repository.assistant_thread_repository as repo_mod
+
+    org_a = Organization(name="A", slug="a"); org_b = Organization(name="B", slug="b")
+    db.add_all([org_a, org_b]); db.commit()
+    db.add_all([
+        AssistantThreadModel(id="t-a", title="A", org_id=org_a.id, created_at="2026-01-01", updated_at="2026-01-01"),
+        AssistantThreadModel(id="t-b", title="B", org_id=org_b.id, created_at="2026-01-01", updated_at="2026-01-01"),
+        AssistantThreadModel(id="t-legacy", title="L", org_id=None, created_at="2026-01-01", updated_at="2026-01-01"),
+    ])
+    db.commit()
+
+    # Point the repository at this test database.
+    factory = sessionmaker(bind=db.get_bind())
+    monkeypatch.setattr(repo_mod, "SessionLocal", factory)
+
+    repo = repo_mod.AssistantThreadRepository()
+    res = asyncio.run(repo.list_threads(org_id=org_a.id, include_archived=True))
+    ids = {t["id"] for t in res["items"]}
+    assert "t-a" in ids and "t-legacy" in ids and "t-b" not in ids

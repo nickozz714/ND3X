@@ -6,7 +6,7 @@ import asyncio
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import or_, func, select
 
 from db.database import SessionLocal
 from models.assistant_thread import AssistantThreadModel, AssistantThreadMessageModel
@@ -47,6 +47,7 @@ class AssistantThreadRepository:
         project_id: Optional[str] = None,
         title: Optional[str] = None,
         metadata_: Optional[Dict[str, Any]] = None,
+        org_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         now = utc_now_iso()
 
@@ -56,6 +57,8 @@ class AssistantThreadRepository:
                 row = db.get(AssistantThreadModel, thread_id)
 
                 if row:
+                    if org_id and row.org_id is None:
+                        row.org_id = org_id  # migration: adopt legacy thread into the org
                     if project_id and not row.project_id:
                         row.project_id = project_id
                     if title and not row.title:
@@ -74,6 +77,7 @@ class AssistantThreadRepository:
 
                 row = AssistantThreadModel(
                     id=thread_id,
+                    org_id=org_id,
                     title=(title or "New thread")[:255],
                     summary=None,
                     project_id=project_id,
@@ -111,6 +115,7 @@ class AssistantThreadRepository:
         include_archived: bool = False,
         limit: int = 50,
         offset: int = 0,
+        org_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         def _run():
             db = SessionLocal()
@@ -122,6 +127,13 @@ class AssistantThreadRepository:
 
                 if project_id:
                     filters.append(AssistantThreadModel.project_id == project_id)
+
+                if org_id is not None:
+                    # Tenancy: this org's threads. NULL rows are legacy in-flight
+                    # (the boot backfill stamps them) — keep them visible so
+                    # nothing disappears mid-migration.
+                    filters.append(or_(AssistantThreadModel.org_id == org_id,
+                                       AssistantThreadModel.org_id.is_(None)))
 
                 if not include_archived:
                     filters.append(AssistantThreadModel.is_archived.is_(False))

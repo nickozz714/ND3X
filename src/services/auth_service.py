@@ -87,7 +87,10 @@ def verify_password(plain: str, hashed: str) -> bool:
     )
     return result
 
-def make_access_token(user_id: int, email: str, roles: List[str] | None = None) -> str:
+def make_access_token(
+    user_id: int, email: str, roles: List[str] | None = None,
+    org_id: int | None = None,
+) -> str:
     log.infox(
         "Access token aanmaken gestart",
         user_id=user_id,
@@ -105,6 +108,10 @@ def make_access_token(user_id: int, email: str, roles: List[str] | None = None) 
         "iat": int(_now().timestamp()),
         "exp": int((_now() + timedelta(minutes=access_min)).timestamp()),
     }
+    # Multi-tenancy: the org this token acts in. Omitted for pre-tenancy callers;
+    # consumers fall back to the user's default membership (no-lockout migration).
+    if org_id is not None:
+        payload["org"] = int(org_id)
     log.debugx(
         "Access token payload opgebouwd",
         user_id=user_id,
@@ -191,7 +198,13 @@ class AuthService:
                     expires_in_seconds=expires_in,
                 )
                 roles = normalize_roles(getattr(user_by_id, "roles", None) or [])
-                refresh_token = make_access_token(int(sub), email, roles=roles)
+                # Preserve the active org across refresh (old tokens without an org
+                # claim fall back to the default membership — migration-safe).
+                org_claim = decoded_token.get("org")
+                if org_claim is None:
+                    from services.tenancy_service import default_org_id
+                    org_claim = default_org_id(db, int(sub))
+                refresh_token = make_access_token(int(sub), email, roles=roles, org_id=org_claim)
                 log.infox(
                     "Access token refresh afgerond",
                     email=email,
@@ -256,7 +269,9 @@ class AuthService:
             raise ValueError("Incorrect email or password")
 
         roles = normalize_roles(getattr(user, "roles", None) or [])
-        token = make_access_token(user.id, user.email, roles)
+        from services.tenancy_service import default_org_id
+        token = make_access_token(user.id, user.email, roles,
+                                  org_id=default_org_id(db, user.id))
         log.infox(
             "Login afgerond",
             email=email,

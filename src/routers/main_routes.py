@@ -8,7 +8,7 @@ from typing import Dict, Any, Literal, Optional, List
 
 from fastapi import UploadFile, File, Form, APIRouter, Depends, HTTPException
 
-from authentication.dependencies import require_user
+from authentication.dependencies import require_user, require_org
 from component.config import settings
 from component.logging import get_logger
 from models.response_models import (
@@ -199,6 +199,7 @@ async def _prepare_ask_attachments(
 async def upload_ask_attachments(
     thread_id: str = Form(...),
     files: List[UploadFile] = File(...),
+    user=Depends(require_user),
 ) -> list[dict]:
     """Upload bounded, thread-scoped files before starting a chat turn."""
     attachments = await attachment_service.upload(thread_id=thread_id, files=files)
@@ -258,7 +259,7 @@ async def upload_ask_attachments(
 
 
 @router.post("/ask")
-async def ask(req: AskRequest) -> Dict[str, Any]:
+async def ask(req: AskRequest, ctx=Depends(require_org)) -> Dict[str, Any]:
     """
     Production-safe public ask entrypoint.
 
@@ -266,6 +267,8 @@ async def ask(req: AskRequest) -> Dict[str, Any]:
     holding a long-running HTTP request open behind Cloudflare.
     """
     payload = req.payload or {}
+    # Multi-tenancy: the run (and its thread) belongs to the caller's org.
+    payload["_org_id"] = ctx.org_id
 
     thread_id = req.thread_id or payload.get("thread_id")
     if not thread_id:
@@ -325,8 +328,10 @@ async def auto_decide(req: Dict[str, Any], db: Session = Depends(get_db)) -> Dic
 
 
 @router.post("/ask/start")
-async def ask_start(req: AskRequest) -> Dict[str, Any]:
+async def ask_start(req: AskRequest, ctx=Depends(require_org)) -> Dict[str, Any]:
     payload = req.payload or {}
+    # Multi-tenancy: the run (and its thread) belongs to the caller's org.
+    payload["_org_id"] = ctx.org_id
 
     thread_id = req.thread_id or payload.get("thread_id")
     if not thread_id:
@@ -371,7 +376,7 @@ async def ask_start(req: AskRequest) -> Dict[str, Any]:
 
 
 @router.post("/ask/blocking", response_model=AskResponse)
-async def ask_blocking(req: AskRequest) -> AskResponse:
+async def ask_blocking(req: AskRequest, ctx=Depends(require_org)) -> AskResponse:
     """
     Legacy compatibility route.
 
@@ -379,6 +384,8 @@ async def ask_blocking(req: AskRequest) -> AskResponse:
     HTTP requests. Public UI traffic should use POST /main/ask or /main/ask/start.
     """
     payload = req.payload or {}
+    # Multi-tenancy: the run (and its thread) belongs to the caller's org.
+    payload["_org_id"] = ctx.org_id
 
     thread_id = req.thread_id or payload.get("thread_id")
     if not thread_id:
@@ -417,23 +424,23 @@ async def ask_blocking(req: AskRequest) -> AskResponse:
 
 
 @router.get("/ask/{thread_id}/{run_id}")
-async def ask_status(thread_id: str, run_id: str) -> Dict[str, Any]:
+async def ask_status(thread_id: str, run_id: str, user=Depends(require_user)) -> Dict[str, Any]:
     return ask_job_service.get_status(thread_id=thread_id, run_id=run_id)
 
 
 @router.get("/ask/{thread_id}/{run_id}/result")
-async def ask_result(thread_id: str, run_id: str) -> Dict[str, Any]:
+async def ask_result(thread_id: str, run_id: str, user=Depends(require_user)) -> Dict[str, Any]:
     return ask_job_service.get_result(thread_id=thread_id, run_id=run_id)
 
 
 @router.post("/ask/{thread_id}/{run_id}/cancel")
-async def ask_cancel(thread_id: str, run_id: str) -> Dict[str, Any]:
+async def ask_cancel(thread_id: str, run_id: str, user=Depends(require_user)) -> Dict[str, Any]:
     """Cancel an in-flight ask run (interrupts orchestration + provider call)."""
     return ask_job_service.cancel_job(thread_id=thread_id, run_id=run_id)
 
 
 @router.post("/ask/{thread_id}/{run_id}/message")
-async def ask_message(thread_id: str, run_id: str, req: AskMessageRequest) -> Dict[str, Any]:
+async def ask_message(thread_id: str, run_id: str, req: AskMessageRequest, user=Depends(require_user)) -> Dict[str, Any]:
     """Add a mid-turn message to an in-flight ask run. The orchestration folds it
     into the current turn at its next safe checkpoint; anything it can't consume is
     carried over to the next turn. Returns queued=False if the run is no longer

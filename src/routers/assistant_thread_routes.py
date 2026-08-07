@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Query
 
-from authentication.dependencies import require_user
+from authentication.dependencies import require_org, require_user
 from services.assistant_project_service import AssistantProjectService
 from services.assistant_thread_service import AssistantThreadService
 
@@ -66,12 +66,14 @@ async def list_threads(
     include_archived: bool = False,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    ctx=Depends(require_org),
 ):
     return await AssistantThreadService().list_threads(
         project_id=project_id,
         include_archived=include_archived,
         limit=limit,
         offset=offset,
+        org_id=ctx.org_id,
     )
 
 

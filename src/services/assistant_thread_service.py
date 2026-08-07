@@ -22,6 +22,7 @@ class AssistantThreadService:
         project_id: Optional[str] = None,
         title: Optional[str] = None,
         metadata_: Optional[Dict[str, Any]] = None,
+        org_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         if project_id:
             project = await self.project_repository.get(project_id)
@@ -33,6 +34,7 @@ class AssistantThreadService:
             project_id=project_id,
             title=title,
             metadata_=metadata_,
+            org_id=org_id,
         )
 
     async def get_thread(self, thread_id: str) -> Dict[str, Any]:
@@ -48,12 +50,14 @@ class AssistantThreadService:
         include_archived: bool = False,
         limit: int = 50,
         offset: int = 0,
+        org_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         return await self.repository.list_threads(
             project_id=project_id,
             include_archived=include_archived,
             limit=limit,
             offset=offset,
+            org_id=org_id,
         )
 
     async def add_user_message(

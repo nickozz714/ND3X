@@ -76,7 +76,9 @@ def require_user(request: Request, db: Session = Depends(get_db)):
         )
 
         db_roles = normalize_roles(getattr(u, "roles", None) or [])
-        return {"id": u.id, "email": u.email, "roles": db_roles}
+        # "org" = the token's org claim (None on pre-tenancy tokens; require_org
+        # resolves the fallback so old sessions keep working).
+        return {"id": u.id, "email": u.email, "roles": db_roles, "org": data.get("org")}
     except HTTPException:
         log.warningx(
             "Authenticatie afgebroken met HTTPException",
@@ -126,3 +128,32 @@ def require_expert_user(user=Depends(require_user)):
 def require_admin_user(user=Depends(require_user)):
     assert_admin_role(user)
     return user
+
+
+def require_org(request: Request, db: Session = Depends(get_db)):
+    """Authenticated + resolved organization context (multi-tenancy phase 2).
+
+    Org resolution is migration-safe: the token's ``org`` claim wins; a
+    pre-tenancy token without the claim falls back to the user's default
+    membership, and a membership-less user is self-healed into the single
+    existing org (see tenancy_service). Only a claim for an org the user does
+    NOT belong to — or no resolvable org at all — is refused."""
+    user = require_user(request, db)
+    from services.tenancy_service import OrgContext, resolve_membership
+
+    claim = user.get("org")
+    m = resolve_membership(db, user["id"], org_id=claim)
+    if m is None and claim is not None:
+        log.warningx(
+            "Org-claim geweigerd: gebruiker is geen lid van deze organisatie",
+            user_id=user["id"], org_id=claim, path=str(request.url.path),
+        )
+        raise HTTPException(status_code=403, detail="Not a member of this organization")
+    if m is None:
+        m = resolve_membership(db, user["id"])
+    if m is None:
+        raise HTTPException(status_code=403, detail="No organization membership")
+    return OrgContext(
+        user_id=user["id"], email=user["email"], roles=user["roles"],
+        org_id=m.org_id, org_role=m.role,
+    )
