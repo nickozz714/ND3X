@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from component.logging import get_logger
@@ -62,8 +63,12 @@ class ProviderRegistryService:
         except Exception:  # noqa: BLE001 — quiet check (no log spam on list)
             return "unreadable"
 
-    def list_providers(self) -> List[ProviderRead]:
-        return [self._to_read(p) for p in self.db.query(Provider).order_by(Provider.id).all()]
+    def list_providers(self, org_id: int | None = None) -> List[ProviderRead]:
+        q = self.db.query(Provider)
+        if org_id is not None:
+            # Tenancy: this org's providers; NULL = shared/legacy stays visible.
+            q = q.filter(or_(Provider.org_id == org_id, Provider.org_id.is_(None)))
+        return [self._to_read(p) for p in q.order_by(Provider.id).all()]
 
     def get_provider(self, provider_id: int) -> Optional[Provider]:
         return self.db.query(Provider).filter(Provider.id == provider_id).first()

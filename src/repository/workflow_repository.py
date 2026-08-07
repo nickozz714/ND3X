@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
 from models.workflow import Workflow, WorkflowOperation
@@ -13,8 +14,12 @@ class WorkflowRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_all(self, skip: int = 0, limit: int = 100, include_disabled: bool = True):
+    def get_all(self, skip: int = 0, limit: int = 100, include_disabled: bool = True,
+                org_id: int | None = None):
         q = self.db.query(Workflow).filter(Workflow.deleted_at.is_(None))
+        if org_id is not None:
+            # Tenancy: this org's workflows; NULL = shared/legacy stays visible.
+            q = q.filter(or_(Workflow.org_id == org_id, Workflow.org_id.is_(None)))
         if not include_disabled:
             q = q.filter(Workflow.is_enabled.is_(True))
         return q.order_by(Workflow.name.asc()).offset(skip).limit(limit).all()

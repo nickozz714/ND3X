@@ -156,3 +156,34 @@ def test_config_domain_lists_filter_by_org(db):
     assert tools == {"t-a"}
     servers = {m.name for m in MCPServerRepository(db).get_all(org_id=a.id)}
     assert servers == {"m-a"}
+
+
+def test_assistants_workflows_providers_filter_by_org(db):
+    """Phase 3 part 2: assistants/workflows/providers listings are org-scoped."""
+    from datetime import datetime as _dt
+    from models.assistant import Assistant
+    from models.workflow import Workflow
+    from models.provider import Provider
+    from repository.assistant_repository import AssistantRepository
+    from repository.workflow_repository import WorkflowRepository
+
+    a = Organization(name="A", slug="a"); b = Organization(name="B", slug="b")
+    db.add_all([a, b]); db.commit()
+    now = _dt.utcnow()
+    db.add_all([
+        Assistant(name="as-a", description="", instruction="", schema={}, assistant_type="answer", is_active=True, org_id=a.id,
+                  created_at=now, updated_at=now),
+        Assistant(name="as-b", description="", instruction="", schema={}, assistant_type="answer", is_active=True, org_id=b.id,
+                  created_at=now, updated_at=now),
+        Workflow(name="wf-a", org_id=a.id, created_at=now, updated_at=now),
+        Workflow(name="wf-b", org_id=b.id, created_at=now, updated_at=now),
+        Provider(name="p-a", provider_type="openai", org_id=a.id, created_at=now, updated_at=now),
+        Provider(name="p-b", provider_type="openai", org_id=b.id, created_at=now, updated_at=now),
+    ])
+    db.commit()
+
+    assert {x.name for x in AssistantRepository(db).get_all(org_id=a.id)} == {"as-a"}
+    assert {x.name for x in WorkflowRepository(db).get_all(org_id=a.id)} == {"wf-a"}
+    from services.providers.registry_service import ProviderRegistryService
+    provs = {p.name for p in ProviderRegistryService(db).list_providers(org_id=a.id)}
+    assert provs == {"p-a"}

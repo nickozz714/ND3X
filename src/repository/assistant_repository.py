@@ -1,4 +1,5 @@
 import logging
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 from models.assistant import Assistant
 from models.tool import Tool
@@ -12,9 +13,13 @@ class AssistantRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_all(self, skip: int = 0, limit: int = 100) -> list[Assistant]:
+    def get_all(self, skip: int = 0, limit: int = 100, org_id: int | None = None) -> list[Assistant]:
         logger.debug("Fetching all assistant (skip=%d, limit=%d)", skip, limit)
-        return self.db.query(Assistant).offset(skip).limit(limit).all()
+        q = self.db.query(Assistant)
+        if org_id is not None:
+            # Tenancy: this org's assistants; NULL = shared/legacy stays visible.
+            q = q.filter(or_(Assistant.org_id == org_id, Assistant.org_id.is_(None)))
+        return q.offset(skip).limit(limit).all()
 
     def get_by_id(self, id: int) -> Optional[Assistant]:
         logger.debug("Fetching assistant by id=%s", id)

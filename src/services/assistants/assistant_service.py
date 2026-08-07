@@ -62,14 +62,14 @@ class AssistantService:
         self.repository = AssistantRepository(db)
         log.debugx("AssistantRepository gekoppeld aan AssistantService")
 
-    def get_all(self, skip: int = 0, limit: int = 100):
+    def get_all(self, skip: int = 0, limit: int = 100, org_id: int | None = None):
         logger.debug("Service: get_all assistant")
         log.infox(
             "Assistants ophalen gestart",
             skip=skip,
             limit=limit,
         )
-        result = self.repository.get_all(skip=skip, limit=limit)
+        result = self.repository.get_all(skip=skip, limit=limit, org_id=org_id)
         log.infox(
             "Assistants ophalen afgerond",
             skip=skip,

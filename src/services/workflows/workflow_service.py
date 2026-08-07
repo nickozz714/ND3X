@@ -26,14 +26,15 @@ class WorkflowService:
             repository_type=type(self.repository).__name__,
         )
 
-    def get_all(self, skip: int = 0, limit: int = 100, include_disabled: bool = True):
+    def get_all(self, skip: int = 0, limit: int = 100, include_disabled: bool = True,
+                org_id: int | None = None):
         log.infox(
             "Workflows ophalen gestart",
             skip=skip,
             limit=limit,
             include_disabled=include_disabled,
         )
-        result = self.repository.get_all(skip=skip, limit=limit, include_disabled=include_disabled)
+        result = self.repository.get_all(skip=skip, limit=limit, include_disabled=include_disabled, org_id=org_id)
         log.infox(
             "Workflows ophalen afgerond",
             skip=skip,

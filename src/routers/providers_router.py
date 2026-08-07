@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from authentication.dependencies import require_user
+from authentication.dependencies import require_user, require_org
 from db.database import get_db
 from services.authz_service import assert_expert_role
 from services.providers.registry_service import ProviderRegistryService
@@ -45,8 +45,8 @@ def provider_presets(user=Depends(require_user)):
 
 # ── Providers ────────────────────────────────────────────────────────────────
 @router.get("", response_model=List[ProviderRead])
-def list_providers(db: Session = Depends(get_db), user=Depends(require_user)):
-    return _svc(db).list_providers()
+def list_providers(db: Session = Depends(get_db), ctx=Depends(require_org)):
+    return _svc(db).list_providers(org_id=ctx.org_id)
 
 
 @router.post("", response_model=ProviderRead)

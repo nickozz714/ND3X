@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, status
-from authentication.dependencies import require_user
+from authentication.dependencies import require_user, require_org
 from services.authz_service import assert_expert_role
 from sqlalchemy.orm import Session
 
@@ -88,13 +88,14 @@ def get_all(
     skip: int = 0,
     limit: int = 100,
     service: AssistantService = Depends(get_service),
+    ctx=Depends(require_org),
 ):
     log.infox(
         "Assistants ophalen gestart",
         skip=skip,
         limit=limit,
     )
-    result = service.get_all(skip=skip, limit=limit)
+    result = service.get_all(skip=skip, limit=limit, org_id=ctx.org_id)
     log.infox(
         "Assistants ophalen afgerond",
         skip=skip,
