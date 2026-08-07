@@ -166,10 +166,23 @@ def require_project(request: Request, db: Session = Depends(get_db)):
     outside the caller's org is refused."""
     ctx = require_org(request, db)
     project_id = (request.headers.get("X-ND3X-Project") or "").strip() or None
+    from models.assistant_thread import AssistantProjectModel
     if project_id:
-        from models.assistant_thread import AssistantProjectModel
         p = db.get(AssistantProjectModel, project_id)
         if not p or (p.org_id is not None and p.org_id != ctx.org_id):
             raise HTTPException(status_code=403, detail="Project not in your organization")
-    ctx.project_id = project_id  # OrgContext is a plain dataclass; attach dynamically
+    else:
+        # No explicit project → the user's "Persoonlijk" project. There is no
+        # project-less state: everyone always works inside a project.
+        from models.tenancy import ProjectMember
+        personal = (
+            db.query(AssistantProjectModel)
+            .join(ProjectMember, ProjectMember.project_id == AssistantProjectModel.id)
+            .filter(AssistantProjectModel.org_id == ctx.org_id,
+                    AssistantProjectModel.domain == "personal",
+                    ProjectMember.user_id == ctx.user_id)
+            .first()
+        )
+        project_id = personal.id if personal else None
+    ctx.project_id = project_id
     return ctx

@@ -83,6 +83,68 @@ async def ensure_default_organization(db: Session) -> None:
         log.infox("Org-backfill voltooid", org_id=org.id, rows=stamped)
 
 
+async def ensure_personal_projects(db: Session) -> None:
+    """Phase 6: every user gets a default "Persoonlijk" project in their org —
+    there is no project-less state anymore. The org owner's personal project
+    additionally adopts all pre-existing project-less content (board items,
+    workflows, repositories, transfer records, threads) so nothing disappears
+    when the workspace model turns on. Idempotent."""
+    import uuid as _uuid
+    from datetime import datetime, timezone
+
+    from models.assistant_thread import AssistantProjectModel
+    from models.tenancy import OrgMembership, ProjectMember
+
+    now = datetime.now(timezone.utc).isoformat()
+    memberships = db.query(OrgMembership).all()
+    personal_of: dict[tuple[int, int], str] = {}
+    for m in memberships:
+        existing = (
+            db.query(AssistantProjectModel)
+            .join(ProjectMember, ProjectMember.project_id == AssistantProjectModel.id)
+            .filter(AssistantProjectModel.org_id == m.org_id,
+                    AssistantProjectModel.domain == "personal",
+                    ProjectMember.user_id == m.user_id)
+            .first()
+        )
+        if existing:
+            personal_of[(m.org_id, m.user_id)] = existing.id
+            continue
+        pr = AssistantProjectModel(
+            id=str(_uuid.uuid4()), name="Persoonlijk", domain="personal",
+            org_id=m.org_id, created_at=now, updated_at=now,
+        )
+        db.add(pr)
+        db.commit()
+        db.add(ProjectMember(project_id=pr.id, user_id=m.user_id, role="lead"))
+        db.commit()
+        personal_of[(m.org_id, m.user_id)] = pr.id
+        log.infox("Persoonlijk project aangemaakt", user_id=m.user_id, org_id=m.org_id)
+
+    # Adopt legacy project-less content into the org owner's personal project.
+    for m in memberships:
+        if m.role != "owner":
+            continue
+        pid = personal_of.get((m.org_id, m.user_id))
+        if not pid:
+            continue
+        adopted = 0
+        for table in ("board_item", "workflow", "repository", "transfer_records",
+                      "assistant_threads"):
+            try:
+                res = db.execute(text(
+                    f"UPDATE {table} SET project_id = :pid "
+                    f"WHERE project_id IS NULL AND (org_id = :oid OR org_id IS NULL)"
+                ), {"pid": pid, "oid": m.org_id})
+                adopted += res.rowcount or 0
+                db.commit()  # per table — one failing table must not undo the rest
+            except Exception as exc:  # noqa: BLE001
+                db.rollback()
+                log.warningx("Personal-project adoptie overgeslagen", table=table, error=str(exc))
+        if adopted:
+            log.infox("Projectloze content geadopteerd in Persoonlijk", org_id=m.org_id, rows=adopted)
+
+
 async def ensure_user_roles_column(db: Session) -> None:
     inspector = inspect(db.bind)
     cols = {c["name"] for c in inspector.get_columns("users")}
@@ -605,6 +667,7 @@ async def run_bootstrap(db: Session) -> None:
     reconcile_schema(db)
     # Multi-tenancy phase 1: default org + memberships + org_id backfill (idempotent).
     await ensure_default_organization(db)
+    await ensure_personal_projects(db)
     await ensure_user_roles_column(db)
     await ensure_message_important_column(db)
     await ensure_message_steps_column(db)

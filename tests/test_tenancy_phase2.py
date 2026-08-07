@@ -266,3 +266,43 @@ def test_phase6_project_workspace_semantics(db):
     without = {s.name for s in repo.get_all(org_id=a.id)}
     assert with_proj == {"catalog_skill", "project_skill"}   # catalog + own
     assert without == {"catalog_skill"}                       # own stays hidden
+
+
+def test_personal_projects_bootstrap_and_adoption(db):
+    """Every member gets a 'Persoonlijk' project; the owner's personal project
+    adopts pre-existing project-less content. Idempotent."""
+    import asyncio as _aio
+    from datetime import datetime as _dt
+    from db.bootstrap import ensure_default_organization, ensure_personal_projects
+    from models.assistant_thread import AssistantProjectModel
+    from models.board import BoardItem
+    from models.tenancy import ProjectMember
+
+    owner = _user(db, "own@b.c", ["Admin"])
+    member = _user(db, "mem@b.c", ["User"])
+    now = _dt.utcnow()
+    db.add(BoardItem(title="legacy", created_at=now, updated_at=now)); db.commit()
+
+    _aio.run(ensure_default_organization(db))
+    _aio.run(ensure_personal_projects(db))
+    db.expire_all()  # raw UPDATEs bypass the session's identity map
+
+    personals = db.query(AssistantProjectModel).filter(
+        AssistantProjectModel.domain == "personal").all()
+    assert len(personals) == 2  # one per member
+    leads = {m.user_id for m in db.query(ProjectMember).all()}
+    assert {owner.id, member.id} <= leads
+    # Legacy content adopted into the OWNER's personal project.
+    item = db.query(BoardItem).filter(BoardItem.title == "legacy").one()
+    owner_personal = (
+        db.query(AssistantProjectModel)
+        .join(ProjectMember, ProjectMember.project_id == AssistantProjectModel.id)
+        .filter(ProjectMember.user_id == owner.id,
+                AssistantProjectModel.domain == "personal")
+        .one()
+    )
+    assert item.project_id == owner_personal.id
+    # Idempotent
+    _aio.run(ensure_personal_projects(db))
+    assert db.query(AssistantProjectModel).filter(
+        AssistantProjectModel.domain == "personal").count() == 2

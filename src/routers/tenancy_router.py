@@ -47,9 +47,19 @@ def my_orgs(ctx=Depends(require_org), db: Session = Depends(get_db)):
         .order_by(Organization.id)
         .all()
     )
+    from models.assistant_thread import AssistantProjectModel
+    personal = (
+        db.query(AssistantProjectModel)
+        .join(ProjectMember, ProjectMember.project_id == AssistantProjectModel.id)
+        .filter(AssistantProjectModel.org_id == ctx.org_id,
+                AssistantProjectModel.domain == "personal",
+                ProjectMember.user_id == ctx.user_id)
+        .first()
+    )
     return {
         "active_org_id": ctx.org_id,
         "org_role": ctx.org_role,
+        "personal_project_id": personal.id if personal else None,
         "orgs": [{"id": o.id, "name": o.name, "slug": o.slug, "role": m.role} for m, o in rows],
     }
 
