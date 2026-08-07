@@ -306,3 +306,39 @@ def test_personal_projects_bootstrap_and_adoption(db):
     _aio.run(ensure_personal_projects(db))
     assert db.query(AssistantProjectModel).filter(
         AssistantProjectModel.domain == "personal").count() == 2
+
+
+def test_personal_project_dedup_and_name_adoption(db):
+    """A user-created project named 'Persoonlijk' is adopted (not duplicated),
+    and existing duplicates are merged into the oldest with content re-pointed."""
+    import asyncio as _aio
+    from db.bootstrap import ensure_default_organization, ensure_personal_projects
+    from models.assistant_thread import AssistantProjectModel, AssistantThreadModel
+    from models.tenancy import ProjectMember
+
+    u = _user(db, "own@b.c", ["Admin"])
+    _aio.run(ensure_default_organization(db))
+    org_id = db.query(Organization).one().id
+
+    # Simulate the bug: a hand-made 'Persoonlijk' (no domain) + a bootstrap one.
+    hand = AssistantProjectModel(id="hand", name="Persoonlijk", org_id=org_id,
+                                 created_at="2026-01-01", updated_at="2026-01-01")
+    boot = AssistantProjectModel(id="boot", name="Persoonlijk", domain="personal",
+                                 org_id=org_id, created_at="2026-02-01", updated_at="2026-02-01")
+    db.add_all([hand, boot]); db.commit()
+    db.add_all([ProjectMember(project_id="hand", user_id=u.id, role="lead"),
+                ProjectMember(project_id="boot", user_id=u.id, role="lead")])
+    db.add(AssistantThreadModel(id="t1", title="x", project_id="boot",
+                                created_at="2026-01-01", updated_at="2026-01-01"))
+    db.commit()
+
+    _aio.run(ensure_personal_projects(db))
+    db.expire_all()
+
+    personals = db.query(AssistantProjectModel).filter(
+        AssistantProjectModel.name == "Persoonlijk").all()
+    assert len(personals) == 1                     # merged, no duplicate created
+    keeper = personals[0]
+    assert keeper.id == "hand" and keeper.domain == "personal"  # oldest adopted
+    thread = db.get(AssistantThreadModel, "t1")
+    assert thread.project_id == "hand"             # content re-pointed

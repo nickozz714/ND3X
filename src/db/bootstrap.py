@@ -99,16 +99,40 @@ async def ensure_personal_projects(db: Session) -> None:
     memberships = db.query(OrgMembership).all()
     personal_of: dict[tuple[int, int], str] = {}
     for m in memberships:
-        existing = (
+        # All candidates: marked personal (via membership) OR a user-created
+        # project literally named "Persoonlijk" this user leads — adopt those
+        # instead of creating a duplicate next to them.
+        marked = (
             db.query(AssistantProjectModel)
             .join(ProjectMember, ProjectMember.project_id == AssistantProjectModel.id)
             .filter(AssistantProjectModel.org_id == m.org_id,
-                    AssistantProjectModel.domain == "personal",
-                    ProjectMember.user_id == m.user_id)
-            .first()
+                    ProjectMember.user_id == m.user_id,
+                    (AssistantProjectModel.domain == "personal")
+                    | (AssistantProjectModel.name == "Persoonlijk"))
+            .order_by(AssistantProjectModel.created_at)
+            .all()
         )
-        if existing:
-            personal_of[(m.org_id, m.user_id)] = existing.id
+        if marked:
+            keeper = marked[0]
+            if keeper.domain != "personal":
+                keeper.domain = "personal"
+                db.commit()
+            # Merge duplicates into the keeper: re-point content, drop the dupe.
+            for dup in marked[1:]:
+                for table in ("assistant_threads", "board_item", "workflow",
+                              "repository", "transfer_records"):
+                    try:
+                        db.execute(text(f"UPDATE {table} SET project_id = :k WHERE project_id = :d"),
+                                   {"k": keeper.id, "d": dup.id})
+                        db.commit()
+                    except Exception:  # noqa: BLE001
+                        db.rollback()
+                db.query(ProjectMember).filter(ProjectMember.project_id == dup.id).delete()
+                db.delete(dup)
+                db.commit()
+                log.infox("Dubbel Persoonlijk-project samengevoegd",
+                          keeper=keeper.id, removed=dup.id, user_id=m.user_id)
+            personal_of[(m.org_id, m.user_id)] = keeper.id
             continue
         pr = AssistantProjectModel(
             id=str(_uuid.uuid4()), name="Persoonlijk", domain="personal",
