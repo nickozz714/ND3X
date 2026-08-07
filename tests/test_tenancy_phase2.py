@@ -120,3 +120,39 @@ def test_thread_list_filters_by_org(db, monkeypatch):
     res = asyncio.run(repo.list_threads(org_id=org_a.id, include_archived=True))
     ids = {t["id"] for t in res["items"]}
     assert "t-a" in ids and "t-legacy" in ids and "t-b" not in ids
+
+
+def test_config_domain_lists_filter_by_org(db):
+    """Phase 3: skills/tools/mcp-server listings are org-scoped (NULL = shared)."""
+    from models.skill import Skill
+    from models.tool import Tool
+    from models.mcp_server import MCPServer
+    from repository.skill_repository import SkillRepository
+    from repository.tool_repository import ToolRepository
+    from repository.mcp_server_repository import MCPServerRepository
+    from datetime import datetime as _dt
+    def _now():
+        return _dt.utcnow()
+
+    a = Organization(name="A", slug="a"); b = Organization(name="B", slug="b")
+    db.add_all([a, b]); db.commit()
+    srv_a = MCPServer(name="m-a", slug="m-a", org_id=a.id, created_at=_now(), updated_at=_now())
+    srv_b = MCPServer(name="m-b", slug="m-b", org_id=b.id, created_at=_now(), updated_at=_now())
+    db.add_all([srv_a, srv_b]); db.commit()
+    db.add_all([
+        Skill(name="s-a", org_id=a.id), Skill(name="s-b", org_id=b.id), Skill(name="s-shared"),
+        Tool(name="t-a", remote_name="t-a", description="", argument={}, type="mcp",
+             tool_instructions="", org_id=a.id, mcp_server_id=srv_a.id,
+             created_at=_now(), updated_at=_now()),
+        Tool(name="t-b", remote_name="t-b", description="", argument={}, type="mcp",
+             tool_instructions="", org_id=b.id, mcp_server_id=srv_b.id,
+             created_at=_now(), updated_at=_now()),
+    ])
+    db.commit()
+
+    skills = {s.name for s in SkillRepository(db).get_all(org_id=a.id)}
+    assert skills == {"s-a", "s-shared"}
+    tools = {t.name for t in ToolRepository(db).get_all(org_id=a.id)}
+    assert tools == {"t-a"}
+    servers = {m.name for m in MCPServerRepository(db).get_all(org_id=a.id)}
+    assert servers == {"m-a"}

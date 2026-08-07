@@ -33,9 +33,9 @@ class MCPServerService:
         self.repo = MCPServerRepository(db)
         log.debugx("MCPServerRepository gekoppeld aan MCPServerService")
 
-    def get_all(self, skip: int = 0, limit: int = 100):
+    def get_all(self, skip: int = 0, limit: int = 100, org_id: int | None = None):
         log.infox("MCP servers ophalen gestart", skip=skip, limit=limit)
-        result = self.repo.get_all(skip=skip, limit=limit)
+        result = self.repo.get_all(skip=skip, limit=limit, org_id=org_id)
         log.infox("MCP servers ophalen afgerond", skip=skip, limit=limit, count=len(result) if result is not None else None)
         return result
 

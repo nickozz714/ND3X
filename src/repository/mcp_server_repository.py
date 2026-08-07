@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 from typing import Optional
 
@@ -13,9 +14,13 @@ class MCPServerRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_all(self, skip: int = 0, limit: int = 100) -> list[MCPServer]:
+    def get_all(self, skip: int = 0, limit: int = 100, org_id: int | None = None) -> list[MCPServer]:
         logger.debug("Fetching all mcp servers (skip=%d, limit=%d)", skip, limit)
-        return self.db.query(MCPServer).offset(skip).limit(limit).all()
+        q = self.db.query(MCPServer)
+        if org_id is not None:
+            # Tenancy: this org's servers; NULL = shared/legacy rows stay visible.
+            q = q.filter(or_(MCPServer.org_id == org_id, MCPServer.org_id.is_(None)))
+        return q.offset(skip).limit(limit).all()
 
     def get_enabled(self) -> list[MCPServer]:
         logger.debug("Fetching enabled mcp servers")

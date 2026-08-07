@@ -1,4 +1,5 @@
 import logging
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 from models.tool import Tool
 from models.assistant_tool import assistant_tool
@@ -13,9 +14,13 @@ class ToolRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_all(self, skip: int = 0, limit: int = 100) -> list[Tool]:
+    def get_all(self, skip: int = 0, limit: int = 100, org_id: int | None = None) -> list[Tool]:
         logger.debug("Fetching all tool (skip=%d, limit=%d)", skip, limit)
-        return self.db.query(Tool).offset(skip).limit(limit).all()
+        q = self.db.query(Tool)
+        if org_id is not None:
+            # Tenancy: this org's tools; NULL = shared/legacy rows stay visible.
+            q = q.filter(or_(Tool.org_id == org_id, Tool.org_id.is_(None)))
+        return q.offset(skip).limit(limit).all()
 
     def get_by_id(self, id: int) -> Optional[Tool]:
         logger.debug("Fetching tool by id=%s", id)
@@ -27,15 +32,19 @@ class ToolRepository:
         query = query.options(joinedload(Tool.assistants))
         return query.filter(Tool.id == id).first()
 
-    def get_all_with_relations(self, skip: int = 0, limit: int = 100) -> list[Tool]:
+    def get_all_with_relations(self, skip: int = 0, limit: int = 100, org_id: int | None = None) -> list[Tool]:
         logger.debug("Fetching all tool with relations (skip=%d, limit=%d)", skip, limit)
         query = self.db.query(Tool)
+        if org_id is not None:
+            query = query.filter(or_(Tool.org_id == org_id, Tool.org_id.is_(None)))
         query = query.options(joinedload(Tool.assistants))
         return query.offset(skip).limit(limit).all()
 
-    def create(self, data: ToolCreate) -> Tool:
+    def create(self, data: ToolCreate, org_id: int | None = None) -> Tool:
         logger.info("Creating new tool")
         db_obj = Tool(**data.model_dump(exclude_unset=True))
+        if org_id is not None and db_obj.org_id is None:
+            db_obj.org_id = org_id
         self.db.add(db_obj)
         self.db.commit()
         self.db.refresh(db_obj)

@@ -31,11 +31,13 @@ class SkillService:
         self.assistant_service = AssistantService(db)
         self.skill_file_service = SkillFileService(db)
 
-    def get_all(self, skip: int = 0, limit: int = 100, include_disabled: bool = True):
+    def get_all(self, skip: int = 0, limit: int = 100, include_disabled: bool = True,
+                org_id: int | None = None):
         return self.skill_repo.get_all(
             skip=skip,
             limit=limit,
             include_disabled=include_disabled,
+            org_id=org_id,
         )
 
     def get_by_id(self, skill_id: int):

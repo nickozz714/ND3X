@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from models.skill import Skill
@@ -11,8 +12,13 @@ class SkillRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_all(self, *, skip: int = 0, limit: int = 100, include_disabled: bool = True):
+    def get_all(self, *, skip: int = 0, limit: int = 100, include_disabled: bool = True,
+                org_id: int | None = None):
         q = self.db.query(Skill)
+
+        if org_id is not None:
+            # Tenancy: this org's skills; NULL = shared/legacy rows stay visible.
+            q = q.filter(or_(Skill.org_id == org_id, Skill.org_id.is_(None)))
 
         if not include_disabled:
             q = q.filter(Skill.is_enabled == True)

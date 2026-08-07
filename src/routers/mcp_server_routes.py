@@ -1,3 +1,4 @@
+from authentication.dependencies import require_org
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -37,8 +38,9 @@ def get_all(
     skip: int = 0,
     limit: int = 100,
     service: MCPServerService = Depends(get_server_service),
+    ctx=Depends(require_org),
 ):
-    return service.get_all(skip=skip, limit=limit)
+    return service.get_all(skip=skip, limit=limit, org_id=ctx.org_id)
 
 
 @router.get("/{mcp_server_id}", response_model=MCPServerResponse)
