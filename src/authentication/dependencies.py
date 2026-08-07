@@ -157,3 +157,19 @@ def require_org(request: Request, db: Session = Depends(get_db)):
         user_id=user["id"], email=user["email"], roles=user["roles"],
         org_id=m.org_id, org_role=m.role,
     )
+
+
+def require_project(request: Request, db: Session = Depends(get_db)):
+    """Org context + the ACTIVE PROJECT from the X-ND3X-Project header (phase 6:
+    project = workspace). Returns the OrgContext with a `project_id` attribute
+    (None = no project selected → org-shared view). A header for a project
+    outside the caller's org is refused."""
+    ctx = require_org(request, db)
+    project_id = (request.headers.get("X-ND3X-Project") or "").strip() or None
+    if project_id:
+        from models.assistant_thread import AssistantProjectModel
+        p = db.get(AssistantProjectModel, project_id)
+        if not p or (p.org_id is not None and p.org_id != ctx.org_id):
+            raise HTTPException(status_code=403, detail="Project not in your organization")
+    ctx.project_id = project_id  # OrgContext is a plain dataclass; attach dynamically
+    return ctx

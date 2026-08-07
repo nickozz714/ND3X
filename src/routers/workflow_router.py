@@ -19,7 +19,7 @@ from schemas.workflow import (
 from services.workflows.workflow_factory import WorkflowFactory
 from services.workflows.workflow_run_service import WorkflowRunService
 from services.workflows.workflow_service import WorkflowService
-from authentication.dependencies import require_user, require_org
+from authentication.dependencies import require_user, require_org, require_project
 from services.authz_service import assert_expert_role
 
 log = get_logger(__name__)
@@ -93,7 +93,7 @@ def list_workflows(
     limit: int = 100,
     include_disabled: bool = True,
     service: WorkflowService = Depends(get_workflow_service),
-    ctx=Depends(require_org),
+    ctx=Depends(require_project),
 ):
     log.infox(
         "Workflows ophalen gestart",
@@ -101,7 +101,7 @@ def list_workflows(
         limit=limit,
         include_disabled=include_disabled,
     )
-    result = service.get_all(skip=skip, limit=limit, include_disabled=include_disabled, org_id=ctx.org_id)
+    result = service.get_all(skip=skip, limit=limit, include_disabled=include_disabled, org_id=ctx.org_id, project_id=ctx.project_id)
     log.infox(
         "Workflows ophalen afgerond",
         skip=skip,

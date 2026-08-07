@@ -15,8 +15,14 @@ class WorkflowRepository:
         self.db = db
 
     def get_all(self, skip: int = 0, limit: int = 100, include_disabled: bool = True,
-                org_id: int | None = None):
+                org_id: int | None = None, project_id: str | None = None):
         q = self.db.query(Workflow).filter(Workflow.deleted_at.is_(None))
+        # Phase 6 (project = workspace): a chosen project sees ONLY its own
+        # workflows; no active project shows the org-shared ones (NULL).
+        if project_id:
+            q = q.filter(Workflow.project_id == project_id)
+        else:
+            q = q.filter(Workflow.project_id.is_(None))
         if org_id is not None:
             # Tenancy: this org's workflows; NULL = shared/legacy stays visible.
             q = q.filter(or_(Workflow.org_id == org_id, Workflow.org_id.is_(None)))

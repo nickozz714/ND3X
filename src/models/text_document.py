@@ -12,6 +12,7 @@ class TextDocument(Base):
     __tablename__ = "text_docs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)  # project scope (multi-tenancy phase 6)
     org_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     source: Mapped[str] = mapped_column(String, nullable=False)
     file_path: Mapped[str] = mapped_column(String, nullable=False, index=True)

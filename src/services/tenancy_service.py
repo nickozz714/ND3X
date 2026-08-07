@@ -28,6 +28,7 @@ class OrgContext:
     roles: list
     org_id: int
     org_role: str  # owner | admin | member
+    project_id: str | None = None  # active project (X-ND3X-Project), phase 6
 
 
 def resolve_membership(db: Session, user_id: int, org_id: int | None = None) -> OrgMembership | None:

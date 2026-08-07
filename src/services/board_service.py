@@ -45,10 +45,17 @@ class BoardService:
         status: Optional[str] = None,
         limit: Optional[int] = None,
         ready_only: bool = False,
+        project_id: Optional[str] = None,
     ) -> List[BoardItem]:
         """Items, ordered for a column: priority desc, then manual position, then
-        oldest first. `ready_only` drops items whose dependencies aren't done."""
+        oldest first. `ready_only` drops items whose dependencies aren't done.
+        `project_id` scopes the board to the active project (phase 6: each project
+        has its own board); None shows org-shared items (project_id IS NULL)."""
         q = self.db.query(BoardItem)
+        if project_id:
+            q = q.filter(BoardItem.project_id == project_id)
+        else:
+            q = q.filter(BoardItem.project_id.is_(None))
         if status:
             q = q.filter(BoardItem.status == _validate_enum(status, BOARD_STATUSES, "status"))
         items = q.all()
@@ -100,9 +107,10 @@ class BoardService:
 
     # ----------------------------------------------------------------- write
 
-    def create_item(self, data: BoardItemCreate, *, actor: str = "user") -> BoardItem:
+    def create_item(self, data: BoardItemCreate, *, actor: str = "user", project_id: str | None = None) -> BoardItem:
         actor = _validate_enum(actor, BOARD_ORIGINS, "actor") or "user"
         item = BoardItem(
+            project_id=project_id,
             title=data.title.strip(),
             description=data.description,
             status=_validate_enum(data.status, BOARD_STATUSES, "status") or "todo",

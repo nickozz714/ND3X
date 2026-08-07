@@ -8,6 +8,7 @@ class Tool(Base):
     __tablename__ = "tool"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    project_id = Column(String(128), nullable=True, index=True)  # project scope (multi-tenancy phase 6)
     org_id = Column(Integer, nullable=True, index=True)  # tenant scope (multi-tenancy phase 1)
     remote_name = Column(String, nullable=False)
     name = Column(String, nullable=False)

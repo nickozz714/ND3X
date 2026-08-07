@@ -12,7 +12,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from authentication.dependencies import require_user
+from authentication.dependencies import require_project, require_user
 from db.database import get_db
 from schemas.board import BoardItemCreate, BoardItemRead, BoardItemUpdate
 from services.board_service import BoardService
@@ -29,11 +29,11 @@ def list_items(
     status: Optional[str] = Query(None),
     ready_only: bool = Query(False),
     db: Session = Depends(get_db),
-    user=Depends(require_user),
+    ctx=Depends(require_project),
 ):
     svc = _svc(db)
     try:
-        items = svc.list_items(status=status, ready_only=ready_only)
+        items = svc.list_items(status=status, ready_only=ready_only, project_id=ctx.project_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     # Attach the computed `ready` flag (not a column) per item.
@@ -41,10 +41,10 @@ def list_items(
 
 
 @router.post("/items", response_model=BoardItemRead)
-def create_item(data: BoardItemCreate, db: Session = Depends(get_db), user=Depends(require_user)):
+def create_item(data: BoardItemCreate, db: Session = Depends(get_db), ctx=Depends(require_project)):
     svc = _svc(db)
     try:
-        item = svc.create_item(data, actor="user")
+        item = svc.create_item(data, actor="user", project_id=ctx.project_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return BoardItemRead(**svc.to_dict(item))

@@ -66,6 +66,7 @@ class TransferRecord(Base):
     __tablename__ = "transfer_records"
 
     id = Column(String(64), primary_key=True, index=True)  # string id (e.g. uuid)
+    project_id = Column(String(128), nullable=True, index=True)  # project scope (multi-tenancy phase 6)
     description = Column(Text, nullable=True)
     status = Column(String(16), nullable=False, default="INACTIVE")  # ACTIVE|INACTIVE|ERROR|FAILED
     version = Column(Integer, nullable=False, default=1)
