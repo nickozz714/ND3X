@@ -88,3 +88,27 @@ in a later phase (the native `secrets` table is scoped normally).
 
 Each phase ships green (backfilled default org keeps single-org installs behaving
 exactly as today) — an install that never adds a second org notices nothing.
+
+## 6. Project = workspace (revision after phase-5 feedback)
+
+A project is not a grants-label but the WORKING ENVIRONMENT. Switching project
+switches everything you see.
+
+- **Project-owned content**: chats/threads (already), meetings, board items,
+  workflows (+runs), transfers, repositories, documents/text docs. Each gets a
+  `project_id`; lists filter on the ACTIVE project (NULL = org-shared/legacy);
+  creates stamp it.
+- **Active-project context**: the FE sends `X-ND3X-Project` on every request
+  (chosen in the topbar switcher, persisted). A `require_project` dependency
+  resolves it (membership via the org; project must belong to the org).
+- **Catalog vs. project-owned capabilities**: skills/tools/MCP servers with
+  `project_id IS NULL` are the org catalog — ASSIGNED to projects via the
+  existing grants. Rows WITH a project_id are project-owned (created inside the
+  project, invisible elsewhere). Session capability set = grants ∪ project-owned
+  ∪ system. AI-model choice per project: a project may pin models (later:
+  per-project routing overrides).
+- **Server Files**: filesystem browser gets a per-project subtree (root/<project>)
+  — separate iteration.
+
+Rollout per domain: board + workflows first, then transfers/repos/docs/meetings,
+then project-owned capability creation UIs.
