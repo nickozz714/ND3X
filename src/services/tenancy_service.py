@@ -60,3 +60,22 @@ def default_org_id(db: Session, user_id: int) -> int | None:
     """Org id to stamp into a fresh access token (None → claim omitted)."""
     m = resolve_membership(db, user_id)
     return m.org_id if m else None
+
+
+def project_skill_grants(db: Session, project_id: str | None) -> list[str] | None:
+    """Skill names granted to a project (phase 4). Returns None when the project
+    has no grants configured — meaning NO restriction (default-open, so existing
+    projects keep working until someone deliberately narrows them)."""
+    if not project_id:
+        return None
+    from models.skill import Skill
+    from models.tenancy import ProjectSkill
+
+    rows = (
+        db.query(Skill.name)
+        .join(ProjectSkill, ProjectSkill.skill_id == Skill.id)
+        .filter(ProjectSkill.project_id == project_id)
+        .all()
+    )
+    names = [r[0] for r in rows]
+    return names or None

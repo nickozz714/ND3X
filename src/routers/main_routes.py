@@ -269,6 +269,19 @@ async def ask(req: AskRequest, ctx=Depends(require_org)) -> Dict[str, Any]:
     payload = req.payload or {}
     # Multi-tenancy: the run (and its thread) belongs to the caller's org.
     payload["_org_id"] = ctx.org_id
+    # Phase 4: project capability grants — if the target project has skill grants,
+    # the session is limited to them (no grants configured = no restriction).
+    _proj = payload.get("project_id") or payload.get("_project_id") or payload.get("assistant_project_id")
+    if _proj:
+        from db.database import SessionLocal as _SL
+        from services.tenancy_service import project_skill_grants as _psg
+        _gdb = _SL()
+        try:
+            _grants = _psg(_gdb, str(_proj))
+        finally:
+            _gdb.close()
+        if _grants is not None:
+            payload["_project_skill_grants"] = _grants
 
     thread_id = req.thread_id or payload.get("thread_id")
     if not thread_id:
@@ -332,6 +345,19 @@ async def ask_start(req: AskRequest, ctx=Depends(require_org)) -> Dict[str, Any]
     payload = req.payload or {}
     # Multi-tenancy: the run (and its thread) belongs to the caller's org.
     payload["_org_id"] = ctx.org_id
+    # Phase 4: project capability grants — if the target project has skill grants,
+    # the session is limited to them (no grants configured = no restriction).
+    _proj = payload.get("project_id") or payload.get("_project_id") or payload.get("assistant_project_id")
+    if _proj:
+        from db.database import SessionLocal as _SL
+        from services.tenancy_service import project_skill_grants as _psg
+        _gdb = _SL()
+        try:
+            _grants = _psg(_gdb, str(_proj))
+        finally:
+            _gdb.close()
+        if _grants is not None:
+            payload["_project_skill_grants"] = _grants
 
     thread_id = req.thread_id or payload.get("thread_id")
     if not thread_id:
@@ -386,6 +412,19 @@ async def ask_blocking(req: AskRequest, ctx=Depends(require_org)) -> AskResponse
     payload = req.payload or {}
     # Multi-tenancy: the run (and its thread) belongs to the caller's org.
     payload["_org_id"] = ctx.org_id
+    # Phase 4: project capability grants — if the target project has skill grants,
+    # the session is limited to them (no grants configured = no restriction).
+    _proj = payload.get("project_id") or payload.get("_project_id") or payload.get("assistant_project_id")
+    if _proj:
+        from db.database import SessionLocal as _SL
+        from services.tenancy_service import project_skill_grants as _psg
+        _gdb = _SL()
+        try:
+            _grants = _psg(_gdb, str(_proj))
+        finally:
+            _gdb.close()
+        if _grants is not None:
+            payload["_project_skill_grants"] = _grants
 
     thread_id = req.thread_id or payload.get("thread_id")
     if not thread_id:

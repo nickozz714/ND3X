@@ -945,6 +945,21 @@ class AssistantPipelineRunner:
         # text_document_management — its text__* tools are now always-on builtins). Keep the
         # valid skills + builtin tools and warn; only truly-unknown names are dropped.
         allowed_skills = self.tool_guard.allowed_skill_names_for(assistant.config)
+        # Phase 4 (multi-tenancy): a project with configured skill grants limits the
+        # session to exactly those skills — the hard capability boundary per project.
+        project_grants = payload.get("_project_skill_grants")
+        if isinstance(project_grants, list):
+            granted = set(project_grants)
+            blocked = [s for s in selected_skill_names if s in allowed_skills and s not in granted]
+            if blocked:
+                self.trace_fn(
+                    trace, thread_id=session_id, turn_id=turn_id,
+                    type="skill_blocked_by_project", level="warn",
+                    summary=f"Skill(s) not granted to this project: {blocked}",
+                    data={"assistant": assistant_name, "blocked": blocked},
+                    progress_cb=progress_cb,
+                )
+            allowed_skills = {s for s in allowed_skills if s in granted}
         unknown_skills = [s for s in selected_skill_names if s not in allowed_skills]
         if unknown_skills:
             selected_skill_names = [s for s in selected_skill_names if s in allowed_skills]

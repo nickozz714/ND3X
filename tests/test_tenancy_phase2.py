@@ -187,3 +187,25 @@ def test_assistants_workflows_providers_filter_by_org(db):
     from services.providers.registry_service import ProviderRegistryService
     provs = {p.name for p in ProviderRegistryService(db).list_providers(org_id=a.id)}
     assert provs == {"p-a"}
+
+
+def test_project_skill_grants(db):
+    """Phase 4: a project with grants limits sessions to those skills; a project
+    without grants imposes no restriction (default-open)."""
+    from models.assistant_thread import AssistantProjectModel
+    from models.skill import Skill
+    from models.tenancy import ProjectSkill
+    from services.tenancy_service import project_skill_grants
+
+    a = Organization(name="A", slug="a")
+    db.add(a); db.commit()
+    proj = AssistantProjectModel(id="p1", name="P1", org_id=a.id,
+                                 created_at="2026-01-01", updated_at="2026-01-01")
+    s1 = Skill(name="granted_skill", org_id=a.id)
+    s2 = Skill(name="other_skill", org_id=a.id)
+    db.add_all([proj, s1, s2]); db.commit()
+
+    assert project_skill_grants(db, "p1") is None          # no grants → open
+    assert project_skill_grants(db, None) is None
+    db.add(ProjectSkill(project_id="p1", skill_id=s1.id)); db.commit()
+    assert project_skill_grants(db, "p1") == ["granted_skill"]
