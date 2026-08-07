@@ -224,6 +224,52 @@ def remove_team_member(team_id: int, user_id: int, ctx=Depends(require_org), db:
     return {"removed": True}
 
 
+# ── projects ──────────────────────────────────────────────────────────────────
+
+class ProjectIn(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
+@router.get("/projects")
+def list_projects(ctx=Depends(require_org), db: Session = Depends(get_db)):
+    """This org's projects, with member/grant counts for the admin overview."""
+    from models.assistant_thread import AssistantProjectModel
+    rows = (
+        db.query(AssistantProjectModel)
+        .filter((AssistantProjectModel.org_id == ctx.org_id) | (AssistantProjectModel.org_id.is_(None)))
+        .order_by(AssistantProjectModel.name)
+        .all()
+    )
+    out = []
+    for pr in rows:
+        members = db.query(ProjectMember).filter(ProjectMember.project_id == pr.id).count()
+        grants = db.query(ProjectSkill).filter(ProjectSkill.project_id == pr.id).count()
+        out.append({
+            "id": pr.id, "name": pr.name, "description": pr.description,
+            "status": getattr(pr, "status", "active"),
+            "is_archived": bool(getattr(pr, "is_archived", False)),
+            "member_count": members, "grant_count": grants,
+        })
+    return out
+
+
+@router.post("/projects")
+def create_project(body: ProjectIn, ctx=Depends(require_org), db: Session = Depends(get_db)):
+    """Create a project in this org; the creator becomes project lead."""
+    import uuid as _uuid
+    from datetime import datetime, timezone
+    from models.assistant_thread import AssistantProjectModel
+    now = datetime.now(timezone.utc).isoformat()
+    pr = AssistantProjectModel(
+        id=str(_uuid.uuid4()), name=body.name.strip(), description=body.description,
+        org_id=ctx.org_id, created_at=now, updated_at=now,
+    )
+    db.add(pr); db.commit()
+    db.add(ProjectMember(project_id=pr.id, user_id=ctx.user_id, role="lead")); db.commit()
+    return {"id": pr.id, "name": pr.name}
+
+
 # ── project members & capability grants ──────────────────────────────────────
 
 def _project_in_org(db: Session, ctx, project_id: str):

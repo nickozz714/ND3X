@@ -209,3 +209,27 @@ def test_project_skill_grants(db):
     assert project_skill_grants(db, None) is None
     db.add(ProjectSkill(project_id="p1", skill_id=s1.id)); db.commit()
     assert project_skill_grants(db, "p1") == ["granted_skill"]
+
+
+def test_system_skills_always_granted(db):
+    """System/runtime skills can never be excluded by a project's grant set."""
+    from models.assistant_thread import AssistantProjectModel
+    from models.skill import Skill
+    from models.tenancy import ProjectSkill
+    from services.tenancy_service import project_skill_grants
+
+    a = Organization(name="A", slug="a")
+    db.add(a); db.commit()
+    proj = AssistantProjectModel(id="p2", name="P2", org_id=a.id,
+                                 created_at="2026-01-01", updated_at="2026-01-01")
+    granted = Skill(name="normal_skill", org_id=a.id)
+    system = Skill(name="workflow_building", is_system=True)
+    runtime = Skill(name="runtime_inspect", is_runtime=True)
+    other = Skill(name="ungranted", org_id=a.id)
+    db.add_all([proj, granted, system, runtime, other]); db.commit()
+    db.add(ProjectSkill(project_id="p2", skill_id=granted.id)); db.commit()
+
+    names = project_skill_grants(db, "p2")
+    assert "normal_skill" in names
+    assert "workflow_building" in names and "runtime_inspect" in names  # forced in
+    assert "ungranted" not in names

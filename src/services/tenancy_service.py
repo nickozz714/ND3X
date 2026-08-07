@@ -78,4 +78,13 @@ def project_skill_grants(db: Session, project_id: str | None) -> list[str] | Non
         .all()
     )
     names = [r[0] for r in rows]
-    return names or None
+    if not names:
+        return None
+    # System/runtime skills are the platform's contracts — they are always
+    # available and can never be excluded by a project's grant set.
+    sys_rows = (
+        db.query(Skill.name)
+        .filter((Skill.is_system.is_(True)) | (Skill.is_runtime.is_(True)))
+        .all()
+    )
+    return sorted(set(names) | {r[0] for r in sys_rows})
