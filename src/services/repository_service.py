@@ -46,8 +46,15 @@ class RepositoryService:
 
     # ------------------------------------------------------------- registry
 
-    def list(self) -> List[Repository]:
-        return self.db.query(Repository).order_by(Repository.name.asc()).all()
+    def list(self, project_id: str | None = None) -> List[Repository]:
+        # Phase 6 (project = workspace): a chosen project sees only its own repos;
+        # no active project shows the org-shared ones (NULL).
+        q = self.db.query(Repository)
+        if project_id:
+            q = q.filter(Repository.project_id == project_id)
+        else:
+            q = q.filter(Repository.project_id.is_(None))
+        return q.order_by(Repository.name.asc()).all()
 
     def get(self, repo_id: int) -> Optional[Repository]:
         return self.db.query(Repository).filter(Repository.id == repo_id).first()
@@ -56,13 +63,14 @@ class RepositoryService:
         return self.db.query(Repository).filter(Repository.name == name).first()
 
     def register(self, *, name: str, remote_url: str,
-                 credential_secret: Optional[str] = None) -> Repository:
+                 credential_secret: Optional[str] = None,
+                 project_id: Optional[str] = None) -> Repository:
         name = _safe_name(name)
         if self.get_by_name(name):
             raise ValueError(f"A repository named '{name}' is already registered.")
         repo = Repository(name=name, remote_url=remote_url.strip(),
                           credential_secret=(credential_secret or None),
-                          clone_status="registered")
+                          clone_status="registered", project_id=project_id)
         self.db.add(repo)
         self.db.commit()
         self.db.refresh(repo)

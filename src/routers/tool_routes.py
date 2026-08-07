@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from authentication.dependencies import require_admin_user, require_org
+from authentication.dependencies import require_admin_user, require_org, require_project
 from db.database import get_db
 from schemas.tool import ToolCreate, ToolResponse, ToolUpdate, ToolWithRelations
 from services.assistants.tool_service import ToolService
@@ -23,9 +23,9 @@ def get_all(
     skip: int = 0,
     limit: int = 100,
     service: ToolService = Depends(get_service),
-    ctx=Depends(require_org),
+    ctx=Depends(require_project),
 ):
-    return service.get_all(skip=skip, limit=limit, org_id=ctx.org_id)
+    return service.get_all(skip=skip, limit=limit, org_id=ctx.org_id, project_id=ctx.project_id)
 
 
 @router.get("/full", response_model=list[ToolWithRelations])

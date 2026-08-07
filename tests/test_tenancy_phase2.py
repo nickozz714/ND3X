@@ -233,3 +233,36 @@ def test_system_skills_always_granted(db):
     assert "normal_skill" in names
     assert "workflow_building" in names and "runtime_inspect" in names  # forced in
     assert "ungranted" not in names
+
+
+def test_phase6_project_workspace_semantics(db):
+    """Content is exclusive to the project; capabilities show catalog + project-own."""
+    from datetime import datetime as _dt
+    from models.assistant_thread import AssistantProjectModel
+    from models.board import BoardItem
+    from models.skill import Skill
+    from repository.skill_repository import SkillRepository
+    from services.board_service import BoardService
+
+    a = Organization(name="A", slug="a")
+    db.add(a); db.commit()
+    db.add(AssistantProjectModel(id="pw", name="PW", org_id=a.id,
+                                 created_at="2026-01-01", updated_at="2026-01-01"))
+    now = _dt.utcnow()
+    db.add_all([
+        BoardItem(title="in-project", project_id="pw", created_at=now, updated_at=now),
+        BoardItem(title="org-shared", created_at=now, updated_at=now),
+        Skill(name="catalog_skill", org_id=a.id),                      # org catalog
+        Skill(name="project_skill", org_id=a.id, project_id="pw"),     # project-owned
+    ])
+    db.commit()
+
+    svc = BoardService(db)
+    assert {i.title for i in svc.list_items(project_id="pw")} == {"in-project"}
+    assert {i.title for i in svc.list_items(project_id=None)} == {"org-shared"}
+
+    repo = SkillRepository(db)
+    with_proj = {s.name for s in repo.get_all(org_id=a.id, project_id="pw")}
+    without = {s.name for s in repo.get_all(org_id=a.id)}
+    assert with_proj == {"catalog_skill", "project_skill"}   # catalog + own
+    assert without == {"catalog_skill"}                       # own stays hidden

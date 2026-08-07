@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from authentication.dependencies import require_user, require_admin_user, require_org
+from authentication.dependencies import require_user, require_admin_user, require_org, require_project
 from services.authz_service import assert_expert_role, user_has_role
 from sqlalchemy.orm import Session
 
@@ -32,13 +32,14 @@ def list_skills(
     limit: int = 100,
     include_disabled: bool = Query(True),
     db: Session = Depends(get_db),
-    ctx=Depends(require_org),
+    ctx=Depends(require_project),
 ):
     return SkillService(db).get_all(
         skip=skip,
         limit=limit,
         include_disabled=include_disabled,
         org_id=ctx.org_id,
+        project_id=ctx.project_id,
     )
 
 
@@ -175,8 +176,9 @@ def create_skill(
     data: SkillCreate,
     db: Session = Depends(get_db),
     user=Depends(require_user),
+    ctx=Depends(require_project),
 ):
-    return SkillService(db).create(data, user=user)
+    return SkillService(db).create(data, user=user, project_id=ctx.project_id)
 
 
 @router.post("/import-markdown", response_model=SkillRead)

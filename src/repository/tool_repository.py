@@ -14,12 +14,18 @@ class ToolRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_all(self, skip: int = 0, limit: int = 100, org_id: int | None = None) -> list[Tool]:
+    def get_all(self, skip: int = 0, limit: int = 100, org_id: int | None = None,
+                project_id: str | None = None) -> list[Tool]:
         logger.debug("Fetching all tool (skip=%d, limit=%d)", skip, limit)
         q = self.db.query(Tool)
         if org_id is not None:
             # Tenancy: this org's tools; NULL = shared/legacy rows stay visible.
             q = q.filter(or_(Tool.org_id == org_id, Tool.org_id.is_(None)))
+        # Phase 6: org catalog (project NULL) + the active project's own tools.
+        if project_id:
+            q = q.filter(or_(Tool.project_id.is_(None), Tool.project_id == project_id))
+        else:
+            q = q.filter(Tool.project_id.is_(None))
         return q.offset(skip).limit(limit).all()
 
     def get_by_id(self, id: int) -> Optional[Tool]:

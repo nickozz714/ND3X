@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from authentication.dependencies import require_user
+from authentication.dependencies import require_user, require_project
 from db.database import get_db
 from services.repository_service import RepositoryService
 
@@ -79,17 +79,18 @@ class WriteFileBody(BaseModel):
 
 
 @router.get("")
-def list_repos(db: Session = Depends(get_db), user=Depends(require_user)):
+def list_repos(db: Session = Depends(get_db), ctx=Depends(require_project)):
     svc = _svc(db)
-    return [svc.to_dict(r) for r in svc.list()]
+    return [svc.to_dict(r) for r in svc.list(project_id=ctx.project_id)]
 
 
 @router.post("")
-def register_repo(data: RegisterRepo, db: Session = Depends(get_db), user=Depends(require_user)):
+def register_repo(data: RegisterRepo, db: Session = Depends(get_db), ctx=Depends(require_project)):
     svc = _svc(db)
     try:
         r = svc.register(name=data.name, remote_url=data.remote_url,
-                         credential_secret=data.credential_secret)
+                         credential_secret=data.credential_secret,
+                         project_id=ctx.project_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return svc.to_dict(r)

@@ -13,12 +13,17 @@ class SkillRepository:
         self.db = db
 
     def get_all(self, *, skip: int = 0, limit: int = 100, include_disabled: bool = True,
-                org_id: int | None = None):
+                org_id: int | None = None, project_id: str | None = None):
         q = self.db.query(Skill)
 
         if org_id is not None:
             # Tenancy: this org's skills; NULL = shared/legacy rows stay visible.
             q = q.filter(or_(Skill.org_id == org_id, Skill.org_id.is_(None)))
+        # Phase 6: org catalog (project NULL) + the active project's own skills.
+        if project_id:
+            q = q.filter(or_(Skill.project_id.is_(None), Skill.project_id == project_id))
+        else:
+            q = q.filter(Skill.project_id.is_(None))
 
         if not include_disabled:
             q = q.filter(Skill.is_enabled == True)
@@ -71,11 +76,13 @@ class SkillRepository:
             out.append(tag)
         return out
 
-    def create(self, data):
+    def create(self, data, project_id: str | None = None):
         payload = data.model_dump(exclude_unset=True) if hasattr(data, "model_dump") else dict(data)
         if "routing_tags" in payload:
             payload["routing_tags"] = self._normalize_tags(payload["routing_tags"])
         item = Skill(**payload)
+        if project_id and item.project_id is None:
+            item.project_id = project_id  # project-owned (phase 6)
 
         self.db.add(item)
         self.db.commit()

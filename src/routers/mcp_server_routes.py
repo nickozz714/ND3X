@@ -1,4 +1,4 @@
-from authentication.dependencies import require_org
+from authentication.dependencies import require_org, require_project
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -38,9 +38,9 @@ def get_all(
     skip: int = 0,
     limit: int = 100,
     service: MCPServerService = Depends(get_server_service),
-    ctx=Depends(require_org),
+    ctx=Depends(require_project),
 ):
-    return service.get_all(skip=skip, limit=limit, org_id=ctx.org_id)
+    return service.get_all(skip=skip, limit=limit, org_id=ctx.org_id, project_id=ctx.project_id)
 
 
 @router.get("/{mcp_server_id}", response_model=MCPServerResponse)
@@ -63,8 +63,10 @@ def get_with_relations(
 async def create(
     data: MCPServerCreate,
     service: MCPServerService = Depends(get_server_service),
+    ctx=Depends(require_project),
 ):
-    server = service.create(data)
+    # Created inside a project → project-owned (invisible outside it).
+    server = service.create(data, project_id=ctx.project_id)
 
     if server.server_type == "stdio" and server.stdio_command and server.is_enabled:
         await stdio_process_manager.start_server(

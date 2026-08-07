@@ -131,8 +131,14 @@ class TransferService:
         return True
 
     # ── transfer records (routes) ──────────────────────────────────────────────
-    def list_records(self) -> List[TransferRecordRead]:
-        return [_record_read(r) for r in self.db.query(TransferRecord).order_by(TransferRecord.id).all()]
+    def list_records(self, project_id: str | None = None) -> List[TransferRecordRead]:
+        # Phase 6: transfer routes are project-owned; NULL = org-shared.
+        q = self.db.query(TransferRecord)
+        if project_id:
+            q = q.filter(TransferRecord.project_id == project_id)
+        else:
+            q = q.filter(TransferRecord.project_id.is_(None))
+        return [_record_read(r) for r in q.order_by(TransferRecord.id).all()]
 
     def get_record(self, record_id: str) -> Optional[TransferRecord]:
         return self.db.get(TransferRecord, record_id)
@@ -141,12 +147,12 @@ class TransferService:
         r = self.get_record(record_id)
         return _record_read(r) if r else None
 
-    def create_record(self, data: TransferRecordCreate) -> TransferRecordRead:
+    def create_record(self, data: TransferRecordCreate, project_id: str | None = None) -> TransferRecordRead:
         for ep in data.endpoints:
             if ep.direction not in TRANSFER_DIRECTIONS:
                 raise ValueError(f"endpoint.direction must be one of {TRANSFER_DIRECTIONS}")
         record = TransferRecord(id=str(uuid.uuid4()), description=data.description, status="INACTIVE", version=1,
-                                schedule_cron=data.schedule_cron)
+                                schedule_cron=data.schedule_cron, project_id=project_id)
         self.db.add(record)
         self.db.flush()
         for ep in data.endpoints:

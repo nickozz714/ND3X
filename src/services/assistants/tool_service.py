@@ -18,14 +18,14 @@ class ToolService:
         self.repository = ToolRepository(db)
         log.debugx("ToolRepository gekoppeld aan ToolService")
 
-    def get_all(self, skip: int = 0, limit: int = 100, org_id: int | None = None):
+    def get_all(self, skip: int = 0, limit: int = 100, org_id: int | None = None, project_id: str | None = None):
         logger.debug("Service: get_all tool")
         log.infox(
             "Tools ophalen gestart",
             skip=skip,
             limit=limit,
         )
-        result = self.repository.get_all(skip=skip, limit=limit, org_id=org_id)
+        result = self.repository.get_all(skip=skip, limit=limit, org_id=org_id, project_id=project_id)
         log.infox(
             "Tools ophalen afgerond",
             skip=skip,

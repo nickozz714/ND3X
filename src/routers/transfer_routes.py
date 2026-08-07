@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from authentication.dependencies import require_user
+from authentication.dependencies import require_project, require_user
 from db.database import get_db
 from schemas.transfer import (
     HostCreate, HostUpdate, HostRead,
@@ -83,8 +83,8 @@ def delete_credential(credential_id: int, svc: TransferService = Depends(_svc)):
 
 # ── transfer records (routes) ───────────────────────────────────────────────────
 @router.get("/records", response_model=list[TransferRecordRead])
-def list_records(svc: TransferService = Depends(_svc)):
-    return svc.list_records()
+def list_records(svc: TransferService = Depends(_svc), ctx=Depends(require_project)):
+    return svc.list_records(project_id=ctx.project_id)
 
 
 @router.get("/records/{record_id}", response_model=TransferRecordRead)
@@ -96,9 +96,9 @@ def get_record(record_id: str, svc: TransferService = Depends(_svc)):
 
 
 @router.post("/records", response_model=TransferRecordRead, status_code=201)
-def create_record(body: TransferRecordCreate, svc: TransferService = Depends(_svc)):
+def create_record(body: TransferRecordCreate, svc: TransferService = Depends(_svc), ctx=Depends(require_project)):
     try:
-        return svc.create_record(body)
+        return svc.create_record(body, project_id=ctx.project_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
 

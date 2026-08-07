@@ -32,12 +32,13 @@ class SkillService:
         self.skill_file_service = SkillFileService(db)
 
     def get_all(self, skip: int = 0, limit: int = 100, include_disabled: bool = True,
-                org_id: int | None = None):
+                org_id: int | None = None, project_id: str | None = None):
         return self.skill_repo.get_all(
             skip=skip,
             limit=limit,
             include_disabled=include_disabled,
             org_id=org_id,
+            project_id=project_id,
         )
 
     def get_by_id(self, skill_id: int):
@@ -46,14 +47,14 @@ class SkillService:
             raise HTTPException(status_code=404, detail="Skill not found")
         return item
 
-    def create(self, data: SkillCreate, user=None):
+    def create(self, data: SkillCreate, user=None, project_id: str | None = None):
         if _is_protected_skill_payload(data):
             from services.authz_service import assert_expert_role
             assert_expert_role(user)
         existing = self.skill_repo.get_by_name(data.name)
         if existing:
             raise HTTPException(status_code=409, detail="Skill name already exists")
-        return self.skill_repo.create(data)
+        return self.skill_repo.create(data, project_id=project_id)
 
     def import_markdown(self, data: SkillMarkdownImport, user=None):
         if bool(getattr(data, "is_system", False) or getattr(data, "is_runtime", False)):

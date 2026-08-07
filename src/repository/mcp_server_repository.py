@@ -14,12 +14,18 @@ class MCPServerRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_all(self, skip: int = 0, limit: int = 100, org_id: int | None = None) -> list[MCPServer]:
+    def get_all(self, skip: int = 0, limit: int = 100, org_id: int | None = None,
+                project_id: str | None = None) -> list[MCPServer]:
         logger.debug("Fetching all mcp servers (skip=%d, limit=%d)", skip, limit)
         q = self.db.query(MCPServer)
         if org_id is not None:
             # Tenancy: this org's servers; NULL = shared/legacy rows stay visible.
             q = q.filter(or_(MCPServer.org_id == org_id, MCPServer.org_id.is_(None)))
+        # Phase 6: org catalog (project NULL) + the active project's own servers.
+        if project_id:
+            q = q.filter(or_(MCPServer.project_id.is_(None), MCPServer.project_id == project_id))
+        else:
+            q = q.filter(MCPServer.project_id.is_(None))
         return q.offset(skip).limit(limit).all()
 
     def get_enabled(self) -> list[MCPServer]:
@@ -47,9 +53,11 @@ class MCPServerRepository:
         )
         return query.filter(MCPServer.id == id).first()
 
-    def create(self, data):
+    def create(self, data, project_id: str | None = None):
         logger.info("Creating new mcp server")
         db_obj = MCPServer(**data.model_dump(exclude_unset=True))
+        if project_id and db_obj.project_id is None:
+            db_obj.project_id = project_id  # project-owned (phase 6)
         db_obj.created_at = datetime.utcnow()
         db_obj.updated_at = datetime.utcnow()
         self.db.add(db_obj)
